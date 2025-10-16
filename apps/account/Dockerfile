@@ -28,6 +28,10 @@ LABEL org.opencontainers.image.source=https://github.com/monobaselabs/monobase
 LABEL org.opencontainers.image.description="Monobase Account App"
 LABEL org.opencontainers.image.licenses=MIT
 
+# Create user with UID 101 to match K8s security context
+RUN addgroup -g 101 -S caddy-k8s && \
+    adduser -u 101 -S -G caddy-k8s caddy-k8s
+
 # Copy the dist folder to Caddy's default serve directory
 COPY --from=builder /app/apps/account/dist /srv
 
@@ -38,13 +42,23 @@ COPY apps/account/Caddyfile /etc/caddy/Caddyfile
 COPY apps/account/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
+# Create necessary directories with proper permissions for non-root user
+RUN mkdir -p /data /config /tmp && \
+    chown -R 101:101 /data /config /tmp /srv && \
+    chmod -R 755 /data /config /tmp /srv
+
 # Set environment variables for runtime configuration
-ENV PORT=80
+ENV PORT=8080
 ENV API_URL="http://localhost:7213"
 ENV ONESIGNAL_APP_ID=""
+ENV XDG_DATA_HOME=/data
+ENV XDG_CONFIG_HOME=/config
 
-# Expose port
-EXPOSE 80
+# Switch to non-root user
+USER 101:101
+
+# Expose port (changed from 80 to 8080 for non-root)
+EXPOSE 8080
 
 # Use entrypoint to generate config.json before starting Caddy
 ENTRYPOINT ["/docker-entrypoint.sh"]

@@ -5,7 +5,7 @@
     admin off
 }
 
-:{$PORT:80} {
+:{$PORT:8080} {
     # Enable gzip compression
     encode gzip
     
