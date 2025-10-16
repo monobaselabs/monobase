@@ -23,6 +23,7 @@ import { registerEmailJobs } from '@/handlers/email/jobs';
 import { registerNotifsJobs } from '@/handlers/notifs/jobs';
 import { registerAuditJobs } from '@/handlers/audit/jobs';
 import { registerBookingJobs } from '@/handlers/booking/jobs';
+import { registerAuthTemplates } from '@/handlers/auth/templates/email/loader';
 
 // Routes
 import { registerRoutes as registerOpenAPIRoutes } from '@/generated/openapi/routes';
@@ -121,9 +122,9 @@ export async function initializeApp(app: App, config: Config): Promise<void> {
   await runMigrations(database);
   logger.debug('Database migrations completed successfully');
 
-  // Initialize email templates
+  // Initialize email templates per module
   logger.debug('Initializing email templates...');
-  await app.email.initializeDefaultTemplates();
+  await registerAuthTemplates(database, logger);
   logger.debug('Email templates initialized successfully');
 
   // Setup admin users if configured
@@ -139,10 +140,12 @@ export async function initializeApp(app: App, config: Config): Promise<void> {
   }
 
   // Initialize and start background job scheduler
+  logger.debug('Registering jobs...');
   registerEmailJobs(jobs, app.email);
   registerNotifsJobs(jobs, app.notifs);
   registerAuditJobs(jobs);
   registerBookingJobs(jobs, app.notifs);
+  logger.debug('Jobs registered successfully');
   
   logger.debug('Starting background job scheduler...');
   await jobs.start();

@@ -6,7 +6,7 @@
 import type { Context } from 'hono';
 import type { App } from '@/types/app';
 import { config as chatRoom_config } from '@/handlers/comms/ws.chat-room';
-import { config as user_config } from '@/handlers/ws/ws.user';
+import { config as user_config } from '@/handlers/auth/ws.user';
 
 export const wsRegistry = {
   'chatRoom_config': chatRoom_config,

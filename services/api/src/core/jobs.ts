@@ -218,7 +218,7 @@ class PgBossScheduler implements JobScheduler {
             tz: config.timezone || 'UTC',
             retryLimit: config.retryLimit || 3
           });
-          this.logger.info(`Scheduled cron job: ${name} with pattern: ${config.schedule}`);
+          this.logger.debug(`Scheduled cron job: ${name} with pattern: ${config.schedule}`);
         } catch (error) {
           this.logger.error({ error, jobName: name, config }, 'Failed to schedule cron job');
           // Don't fail startup for scheduling errors - job can still be triggered manually
@@ -232,7 +232,7 @@ class PgBossScheduler implements JobScheduler {
           await this.boss.schedule(name, cronPattern, {}, {
             retryLimit: config.retryLimit || 3
           });
-          this.logger.info(`Scheduled interval job: ${name} every ${config.intervalMinutes} minutes`);
+          this.logger.debug(`Scheduled interval job: ${name} every ${config.intervalMinutes} minutes`);
         } catch (error) {
           this.logger.error({ error, jobName: name, config }, 'Failed to schedule interval job');
           // Don't fail startup for scheduling errors - job can still be triggered manually

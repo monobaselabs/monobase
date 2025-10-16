@@ -52,7 +52,7 @@ async function main() {
     // Generate Better-Auth schema
     console.log('🔐 Generating Better-Auth schema...');
     try {
-      await $`npx @better-auth/cli@latest generate --config scripts/generate.auth.ts --output src/generated/better-auth/schema.ts -y`;
+      await $`bunx @better-auth/cli@latest generate --config scripts/generate.auth.ts --output src/generated/better-auth/schema.ts -y`;
       console.log('   ✓ Generated Better-Auth schema\n');
     } catch (error) {
       console.error('❌ Better-Auth generation failed:', error);

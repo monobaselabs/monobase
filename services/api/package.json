@@ -1,6 +1,6 @@
 {
   "name": "@monobase/api",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Monobase Application Platform API Service",
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "dev:deps:up": "docker compose -f docker-compose.deps.yml up -d --wait",
     "dev:deps:down": "docker compose -f docker-compose.deps.yml down -v",
     "build": "bun run scripts/build.ts",
+    "bundle": "NODE_ENV=production bun build src/index.ts --outdir=dist --target=bun",
+    "start": "NODE_ENV=production bun dist/index.js",
     "generate": "bun scripts/generate.ts",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",

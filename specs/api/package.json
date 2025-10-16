@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build:openapi": "tsp compile src/main.tsp && mkdir -p dist/openapi && cp dist/@typespec/openapi3/openapi.json dist/openapi/openapi.json && bun run scripts/post-process-openapi.ts",
-    "build:types": "mkdir -p dist/typescript-types && npx openapi-typescript dist/openapi/openapi.json -o dist/typescript-types/api.d.ts",
+    "build:types": "mkdir -p dist/typescript-types && bunx openapi-typescript dist/openapi/openapi.json -o dist/typescript-types/api.d.ts",
     "build": "bun run build:openapi && bun run build:types",
     "docs": "bun run docs-server.ts",
     "format": "tsp format src/**/*.tsp",

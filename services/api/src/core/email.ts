@@ -9,7 +9,6 @@ import type { Logger } from '@/types/logger';
 import type { Config } from '@/core/config';
 import { EmailTemplateRepository } from '@/handlers/email/repos/template.repo';
 import { EmailQueueRepository } from '@/handlers/email/repos/queue.repo';
-import { initializeEmailTemplates } from '@/handlers/email/templates/initializer';
 import {
   EmailTemplateTags,
   type QueueEmailRequest,
@@ -269,11 +268,6 @@ class OneSignalProvider implements EmailProvider {
  */
 export interface EmailService {
   /**
-   * Initialize default email templates
-   */
-  initializeDefaultTemplates(): Promise<void>;
-  
-  /**
    * Queue an email for sending (modern templateId-based)
    */
   queueEmail(request: QueueEmailRequest): Promise<EmailQueueItem>;
@@ -325,19 +319,11 @@ class EmailServiceImpl implements EmailService {
     this.fullConfig = config;
     
     // Bind methods to maintain context
-    this.initializeDefaultTemplates = this.initializeDefaultTemplates.bind(this);
     this.queueEmail = this.queueEmail.bind(this);
     this.sendEmail = this.sendEmail.bind(this);
     this.previewTemplate = this.previewTemplate.bind(this);
     this.renderTemplate = this.renderTemplate.bind(this);
     this.processPendingEmails = this.processPendingEmails.bind(this);
-  }
-  
-  /**
-   * Initialize default email templates
-   */
-  async initializeDefaultTemplates(): Promise<void> {
-    await initializeEmailTemplates(this.db, this.logger);
   }
   
   /**
