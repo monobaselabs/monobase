@@ -47,6 +47,10 @@ RUN mkdir -p /data /config /tmp && \
     chown -R 101:101 /data /config /tmp /srv && \
     chmod -R 755 /data /config /tmp /srv
 
+# Ensure Caddy binary is executable by user 101 (critical for K8s security context)
+RUN chown 101:101 /usr/bin/caddy && \
+    chmod +x /usr/bin/caddy
+
 # Set environment variables for runtime configuration
 ENV PORT=8080
 ENV API_URL="http://localhost:7213"
