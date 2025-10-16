@@ -9,18 +9,8 @@ import type { Logger } from '@/types/logger';
 
 // Create logger instance with config
 export function createLogger(config: Config): Logger {
-  const logger = pino({
+  const options: any = {
     level: config.logging.level,
-    transport: config.logging.pretty
-      ? {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            ignore: 'pid,hostname',
-            translateTime: 'HH:MM:ss',
-          },
-        }
-      : undefined,
     serializers: {
       req: (req) => ({
         method: req.method,
@@ -35,7 +25,21 @@ export function createLogger(config: Config): Logger {
     base: {
       service: 'api',
     },
-  });
+  };
 
+  // Pretty printing configuration - dead code eliminated in production builds
+  // The NODE_ENV check is replaced at compile time via --define flag
+  if (process.env.NODE_ENV !== 'production' && config.logging.pretty) {
+    options.transport = {
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        ignore: 'pid,hostname',
+        translateTime: 'HH:MM:ss',
+      },
+    };
+  }
+
+  const logger = pino(options);
   return logger;
 }

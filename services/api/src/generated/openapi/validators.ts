@@ -1,8 +1,13 @@
 import { z } from 'zod';
 import ISO6391 from 'iso-639-1';
-import countries from 'i18n-iso-countries';
+// Import browser version to bypass entry-node.js dynamic requires
+import countries from 'i18n-iso-countries/index';
+import enLocale from 'i18n-iso-countries/langs/en.json';
 import { getTimeZones } from '@vvo/tzdb';
 import { isValidPhoneNumber } from 'libphonenumber-js';
+
+// Register English locale for country code validation
+countries.registerLocale(enLocale);
 
 // Generated Zod validators from OpenAPI spec
 

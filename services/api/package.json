@@ -7,7 +7,7 @@
     "dev": "bun src/index.ts",
     "dev:deps:up": "docker compose -f docker-compose.deps.yml up -d --wait",
     "dev:deps:down": "docker compose -f docker-compose.deps.yml down -v",
-    "build": "bun build --compile --minify --sourcemap --external ajv --external ajv-draft-04 src/index.ts --outfile dist/server",
+    "build": "bun run scripts/build.ts",
     "generate": "bun scripts/generate.ts",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
