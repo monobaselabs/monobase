@@ -1,10 +1,15 @@
 /**
  * API service entry point
  * Parses configuration and starts the server with proper dependency management
+ *
+ * Exports createApp and parseConfig for Boa bundle builds.
  */
 
 import { createApp, initializeApp, cleanupApp } from '@/app';
 import { parseConfig } from '@/core/config';
+
+// Export for Boa bundle
+export { createApp, parseConfig };
 
 // Parse configuration from CLI args and environment
 const config = parseConfig();

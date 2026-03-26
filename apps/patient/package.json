@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:icon": "tauri icon",
     "typecheck": "tsc --noEmit",
     "test": "bun test src/",
     "test:e2e": "playwright test",
@@ -42,6 +45,8 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.4.1",
+    "@tauri-apps/api": "^2.4.0",
     "@faker-js/faker": "^10.0.0",
     "@monobase/typescript-config": "workspace:*",
     "@playwright/test": "^1.55.0",

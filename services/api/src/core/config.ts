@@ -108,7 +108,7 @@ export function parseConfig(): Config {
       publicUrl,
     },
     
-    // Database configuration
+    // Database configuration (dialect auto-detected from URL)
     database: {
       url: process.env['DATABASE_URL'] || 'postgres://postgres:password@localhost:5432/monobase',
       poolMin: parseIntValue(process.env['DB_POOL_MIN'], 2),

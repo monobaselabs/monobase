@@ -5,9 +5,13 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import path from 'path'
 
 export default defineConfig({
+  // Tauri expects a fixed port, exit if unavailable
+  clearScreen: false,
   server: {
     port: 3003,
+    strictPort: true,
   },
+  envPrefix: ['VITE_', 'TAURI_ENV_*'],
   resolve: {
     alias: {
       // Specific path for CSS (must come first to match before general pattern)
@@ -29,10 +33,13 @@ export default defineConfig({
   build: {
     outDir: './dist',
     emptyOutDir: true,
-    minify: 'esbuild',
+    // Tauri supports es2021
+    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari14',
+    minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
+    sourcemap: !!process.env.TAURI_ENV_DEBUG,
     esbuild: {
       // Remove console.log in production, keep console.error/warn for debugging
-      drop: ['console.log'],
+      drop: process.env.TAURI_ENV_DEBUG ? [] : ['console.log'],
     },
   },
 })

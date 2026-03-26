@@ -1,6 +1,6 @@
 /**
  * Database connection factory functions without global state
- * Uses Drizzle ORM with PostgreSQL via pg.Pool
+ * Uses Drizzle ORM with PostgreSQL via pg.Pool or SQLite for embedded mode
  */
 
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -9,6 +9,26 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import type { Logger } from '@/types/logger';
 import path from 'path';
+
+export type Dialect = 'postgresql' | 'sqlite';
+
+/**
+ * Detect the dialect from a DATABASE_URL string.
+ *
+ * - `postgres://...` or `postgresql://...` → 'postgresql'
+ * - `sqlite://...` or `:memory:` or path ending in `.db`/`.sqlite` → 'sqlite'
+ * - Defaults to 'postgresql'
+ */
+export function detectDialect(databaseUrl: string): Dialect {
+  if (
+    databaseUrl?.startsWith('sqlite://') ||
+    databaseUrl === ':memory:' ||
+    /\.(db|sqlite|sqlite3)$/i.test(databaseUrl || '')
+  ) {
+    return 'sqlite';
+  }
+  return 'postgresql';
+}
 
 /**
  * Database configuration
@@ -30,9 +50,25 @@ export type DatabaseInstance = NodePgDatabase;
 /**
  * Create a new database instance with the given configuration
  * Returns the Drizzle instance directly for simplified usage
+ *
+ * Dialect is auto-detected from the URL:
+ * - `postgres://` or `postgresql://` → PostgreSQL
+ * - `sqlite://` or `:memory:` or `.db`/`.sqlite` → SQLite
  */
 export function createDatabase(config: DatabaseConfig): DatabaseInstance {
-  // Parse schema from connection string if present
+  const dialect = detectDialect(config.url);
+
+  if (dialect === 'sqlite') {
+    // SQLite mode - for embedded Boa/Tauri apps
+    // Note: SQLite is handled by Boa's __db native bridge, not here
+    // This branch exists for future Bun-native SQLite support
+    throw new Error(
+      'SQLite is not yet supported in Bun server mode. ' +
+      'For embedded apps, use the Boa JS engine with native SQLite bridge.'
+    );
+  }
+
+  // PostgreSQL mode
   let schemaName: string | null = null;
   let cleanUrl = config.url;
 

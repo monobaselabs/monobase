@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Desktop-specific permissions (embedded local mode)",
+  "platforms": ["linux", "macOS", "windows"],
+  "windows": [
+    "*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:webview:allow-print",
+    "log:default",
+    "opener:default",
+    "fs:allow-download-read-recursive",
+    "fs:allow-download-write-recursive",
+    "fs:allow-app-read-recursive",
+    "fs:allow-app-write-recursive",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:default",
+    "http:default",
+    "shell:allow-open",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:default",
+    "process:allow-restart",
+    "process:allow-exit",
+    "clipboard-manager:allow-read-text"
+  ]
+}

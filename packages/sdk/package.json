@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./api": "./src/api.ts",
+    "./transport": "./src/transport.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
     "./react/*": "./src/react/*"
@@ -22,9 +23,15 @@
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5.0.0",
+    "@tauri-apps/api": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sonner": "^2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tauri-apps/api": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@monobase/typescript-config": "workspace:*",

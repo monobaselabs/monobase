@@ -1,3 +1,6 @@
+import { getTransport, setHttpBaseUrl, setTransportMode } from './transport'
+export { setTransportMode, getTransportInfo, isTauriEnvironment, isEmbeddedMode } from './transport'
+
 /**
  * API Error class for handling API errors consistently
  */
@@ -38,6 +41,7 @@ let globalApiBaseUrl = 'http://localhost:7213'
  */
 export function setApiBaseUrl(url: string) {
   globalApiBaseUrl = url
+  setHttpBaseUrl(url) // Also update transport layer
 }
 
 /**
@@ -48,37 +52,45 @@ export function getApiBaseUrl(): string {
 }
 
 /**
- * Simple fetch wrapper with authentication
+ * API request using transport abstraction
+ * Automatically switches between HTTP and IPC based on environment
  */
 async function api<T = any>(
   url: string,
   options?: RequestInit
 ): Promise<T> {
-  // Create AbortController for timeout handling
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30000) // 30s timeout
+  const transport = getTransport()
+
+  // Extract headers from options
+  const headers: Record<string, string> = {}
+  if (options?.headers) {
+    const optHeaders = options.headers
+    if (optHeaders instanceof Headers) {
+      optHeaders.forEach((value, key) => { headers[key] = value })
+    } else if (Array.isArray(optHeaders)) {
+      for (const [key, value] of optHeaders) {
+        headers[key] = value
+      }
+    } else {
+      Object.assign(headers, optHeaders)
+    }
+  }
 
   try {
-    // Make request with explicit credentials handling
-    const response = await fetch(`${globalApiBaseUrl}${url}`, {
-      ...options,
-      credentials: 'include',  // This sends cookies which is managed by better-auth/client
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+    const response = await transport.request({
+      method: options?.method || 'GET',
+      url,
+      body: options?.body as string | undefined,
+      headers,
     })
 
-    clearTimeout(timeoutId)
-
     // Handle response
-    if (!response.ok) {
+    if (response.status >= 400) {
       let errorData
       try {
-        errorData = await response.json()
+        errorData = JSON.parse(response.body)
       } catch {
-        errorData = { message: response.statusText }
+        errorData = { message: `API Error: ${response.status}` }
       }
 
       throw new ApiError(
@@ -89,20 +101,23 @@ async function api<T = any>(
     }
 
     // Handle no content responses
-    if (response.status === 204) {
+    if (response.status === 204 || !response.body) {
       return {} as T
     }
 
     // Parse JSON response
     try {
-      return await response.json()
+      return JSON.parse(response.body)
     } catch {
       return {} as T
     }
   } catch (error) {
-    clearTimeout(timeoutId)
-    
-    // Handle timeout/abort errors
+    // Re-throw ApiError as-is
+    if (error instanceof ApiError) {
+      throw error
+    }
+
+    // Handle timeout errors
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ApiError(
         408,
@@ -110,7 +125,7 @@ async function api<T = any>(
         { timeout: true }
       )
     }
-    
+
     // Re-throw other errors
     throw error
   }
