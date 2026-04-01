@@ -1,0 +1,20 @@
+{
+  "name": "@monobase/api-rs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Monobase API — Rust (Axum + SeaORM)",
+  "scripts": {
+    "test": "bun test",
+    "test:e2e": "./run-tests.sh",
+    "generate": "npx tsx generator-rs.ts",
+    "deps:up": "docker compose up -d --wait",
+    "deps:down": "docker compose down -v"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^9.0.0",
+    "@types/bun": "latest",
+    "@types/pg": "^8.15.5",
+    "pg": "^8.16.3"
+  }
+}
