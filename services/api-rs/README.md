@@ -148,4 +148,4 @@ Interactive API docs available at `/docs` when the server is running. The OpenAP
 
 ## Full Specification
 
-See [API_REWRITE.md](../../API_REWRITE.md) for the complete rewrite specification including all 68 routes, database schemas, and architectural decisions.
+See [API_REWRITE.md](./API_REWRITE.md) for the complete rewrite specification including all 68 routes, database schemas, and architectural decisions.

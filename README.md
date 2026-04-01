@@ -158,7 +158,7 @@ The Rust service is a drop-in replacement for the TypeScript service — same AP
 - **SQLite + PostgreSQL**: Runtime dialect detection from `DATABASE_URL`
 - **Docker**: `docker build -t monobase-api services/api-rs/`
 
-See [API_REWRITE.md](./API_REWRITE.md) for the full rewrite specification.
+See [API_REWRITE.md](./services/api-rs/API_REWRITE.md) for the full rewrite specification.
 
 ### API Specifications (`specs/api/`)
 

@@ -263,7 +263,7 @@ The Rust service is a drop-in replacement for the TypeScript service. Same API s
 
 **Structure**: `src/{auth, config, context, db, embedded, error, generated, handlers, middleware, model, service, transport}`
 
-**Full spec**: See [API_REWRITE.md](./API_REWRITE.md)
+**Full spec**: See [API_REWRITE.md](./services/api-rs/API_REWRITE.md)
 
 ## When in Doubt
 
@@ -271,4 +271,4 @@ The Rust service is a drop-in replacement for the TypeScript service. Same API s
 2. Check [CONTRIBUTING.md](./CONTRIBUTING.md) for development patterns
 3. Reference existing handlers in `services/api/src/handlers/` (TypeScript) or `services/api-rs/src/handlers/` (Rust) for implementation patterns
 4. Check OpenAPI spec at `specs/api/dist/openapi/openapi.json` for API contracts
-5. Check [API_REWRITE.md](./API_REWRITE.md) for Rust service architecture and decisions
+5. Check [API_REWRITE.md](./services/api-rs/API_REWRITE.md) for Rust service architecture and decisions
