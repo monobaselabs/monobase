@@ -8,8 +8,11 @@ Native Rust port of the Monobase API service. Drop-in replacement for `services/
 # Development
 cargo run
 
-# Run tests
+# Run unit tests
 cargo test
+
+# Run E2E tests (requires running server + deps)
+cd tests && bun install && ./scripts/run-tests.sh
 
 # Release build (9.6 MB binary)
 cargo build --release

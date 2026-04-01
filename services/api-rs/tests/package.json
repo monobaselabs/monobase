@@ -1,13 +1,11 @@
 {
-  "name": "@monobase/api-rs-tests",
+  "name": "@monobase/api-rs-e2e",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Language-agnostic E2E tests for the Monobase API (works against both TS and Rust implementations)",
+  "description": "E2E tests for the Monobase Rust API service",
   "scripts": {
     "test": "bun test",
-    "test:ts": "API_URL=http://localhost:7213 bun test",
-    "test:rs": "API_URL=http://localhost:7213 bun test",
     "deps:up": "docker compose up -d --wait",
     "deps:down": "docker compose down -v"
   },
