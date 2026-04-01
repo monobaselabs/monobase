@@ -2,384 +2,324 @@
 
 ## Overview
 
-The API uses **pg-boss** for background job processing. Jobs are registered at startup and run on schedule or manually triggered.
+The API uses a **custom pg-boss table poller** for background job processing. The scheduler polls the `pgboss.job` table directly using SeaORM, with no external job-runner process required. Jobs are registered at startup and dispatched to async Tokio tasks.
 
-**For pg-boss details**, see [pg-boss documentation](https://github.com/timgit/pg-boss/blob/master/docs/readme.md).
+**Implementation**: `src/service/jobs.rs`
 
 ---
 
-## Job Scheduler Interface
+## Job Scheduler
 
-Location: `src/core/jobs.ts`
+Location: `src/service/jobs.rs`
 
-**Purpose**: Thin abstraction over pg-boss that uses the existing Drizzle database connection.
+**Purpose**: Poll the `pgboss.job` PostgreSQL table for pending jobs and dispatch them to registered async handlers.
 
 ### Key Features
 
-- **Shared Database Connection**: Reuses Drizzle's pg.Pool (no extra connections)
-- **Provider-Agnostic**: Interface can be swapped without changing handler code
-- **Automatic Retries**: Exponential backoff for failed jobs (configurable)
-- **Cron Support**: Schedule jobs with cron syntax
-- **Interval Support**: Run jobs at regular intervals
-- **Manual Triggering**: Start jobs on-demand via API
+- **Shared Database Connection**: Reuses the SeaORM `DatabaseConnection` — no extra connections
+- **Tokio-native**: Handlers are `tokio::task::JoinHandle<()>`-returning closures
+- **SELECT … FOR UPDATE SKIP LOCKED**: Prevents double-processing under concurrent instances
+- **Graceful shutdown**: `stop()` sets an atomic flag; the poll loop exits cleanly
 
----
+### Core Types
 
-## Job Types
+```rust
+type JobHandler = Arc<dyn Fn(serde_json::Value) -> tokio::task::JoinHandle<()> + Send + Sync>;
 
-### 1. Cron Jobs
-
-Run on a schedule using cron syntax:
-
-```typescript
-scheduler.registerCron('job-name', '0 3 * * *', async (context) => {
-  // Runs daily at 3 AM
-});
-```
-
-**Cron patterns**:
-- `'0 3 * * *'` - Daily at 3 AM
-- `'*/15 * * * *'` - Every 15 minutes
-- `'0 0 * * 0'` - Weekly on Sunday at midnight
-
-See [crontab.guru](https://crontab.guru/) for pattern reference.
-
-### 2. Interval Jobs
-
-Run at regular intervals:
-
-```typescript
-scheduler.registerInterval('job-name', 60000, async (context) => {
-  // Runs every 60 seconds
-});
-```
-
-**Note**: Intervals convert to cron patterns internally (minimum 1 minute).
-
-### 3. Delayed Jobs
-
-Run once after a delay:
-
-```typescript
-scheduler.registerDelayed('job-name', 5000, async (context) => {
-  // Handler logic
-});
-
-// Trigger with delay
-await scheduler.trigger('job-name', { data: 'value' });
+pub struct JobScheduler {
+    db: DatabaseConnection,
+    handlers: Arc<Mutex<HashMap<String, JobHandler>>>,
+    running: Arc<Mutex<bool>>,
+}
 ```
 
 ---
 
-## Registration Pattern
+## Job Registration
 
-### Module Structure
+### Register a Handler
 
-```
-src/handlers/[module]/
-├── jobs/
-│   ├── index.ts          # Register all module jobs
-│   └── [specific-job].ts # Optional: Complex job logic
-├── repos/
-└── handlers...
+```rust
+pub async fn register<F>(&self, name: &str, handler: F)
+where
+    F: Fn(serde_json::Value) -> tokio::task::JoinHandle<()> + Send + Sync + 'static,
 ```
 
-### Registration File Template
+**Example**:
 
-```typescript
-// src/handlers/[module]/jobs/index.ts
-import type { JobScheduler, JobContext } from '@/core/jobs';
-
-export function register[Module]Jobs(scheduler: JobScheduler): void {
-  // Cron job example
-  scheduler.registerCron('module.task', '0 3 * * *', async (context: JobContext) => {
-    const { db, logger, jobId } = context;
-    logger.debug('Starting job', { jobId });
-    
-    try {
-      // Lazy import repository
-      const { ModuleRepository } = await import('../repos/module.repo');
-      const repo = new ModuleRepository(db, logger);
-      
-      // Perform work
-      const result = await repo.performTask();
-      
-      logger.info('Job completed', { jobId, result });
-    } catch (error) {
-      logger.error({ error, jobId }, 'Job failed');
-      throw error; // pg-boss handles retry
-    }
-  });
-  
-  // Interval job example
-  scheduler.registerInterval('module.cleanup', 300000, async (context) => {
-    // Runs every 5 minutes
-  });
-}
+```rust
+scheduler.register("audit.retention", |data| {
+    tokio::spawn(async move {
+        tracing::info!(?data, "Running audit retention job");
+        // perform work...
+    })
+}).await;
 ```
 
-### Registration in Main
+### Registration in `main.rs`
 
-```typescript
-// src/index.ts
-import { registerAuditJobs } from '@/handlers/audit/jobs';
-import { registerEmailJobs } from '@/handlers/email/jobs';
+```rust
+// After building AppContext
+let scheduler = JobScheduler::new(ctx.db.clone());
 
-// After job scheduler is created
-registerAuditJobs(jobScheduler);
-registerEmailJobs(jobScheduler);
+scheduler.register("audit.retention", |data| {
+    tokio::spawn(async move { /* ... */ })
+}).await;
 
-await jobScheduler.start();
+scheduler.register("email.process-queue", |data| {
+    tokio::spawn(async move { /* ... */ })
+}).await;
+
+scheduler.start().await;
 ```
 
 ---
 
-## Job Context
+## Job Triggering
 
-Every job handler receives a context object:
+### Trigger a Job Manually
 
-```typescript
-interface JobContext {
-  db: DatabaseInstance;     // Drizzle database instance
-  logger: Logger;            // Pino logger with job metadata
-  jobId: string;             // Unique job execution ID
-  jobName: string;           // Registered job name
-  data?: any;                // Data passed to job
+```rust
+pub async fn trigger(&self, name: &str, data: serde_json::Value) -> Result<String, String>
+```
+
+Inserts a row into `pgboss.job` with `state = 'created'` and returns the generated UUID job ID:
+
+```rust
+// Trigger without data
+let job_id = scheduler.trigger("audit.retention", serde_json::json!({})).await?;
+
+// Trigger with data
+let job_id = scheduler.trigger("billing.retry-payment", serde_json::json!({
+    "invoiceId": "123",
+    "attempt": 2
+})).await?;
+
+tracing::info!(job_id, "Job triggered");
+```
+
+---
+
+## Poll Loop
+
+The scheduler spawns a single Tokio task that polls every 5 seconds when no jobs are available:
+
+```rust
+pub async fn start(&self) {
+    // Uses SELECT … FOR UPDATE SKIP LOCKED to claim a job atomically
+    let sql = r#"
+        UPDATE pgboss.job
+        SET state = 'active', started_on = NOW()
+        WHERE id = (
+            SELECT id FROM pgboss.job
+            WHERE state = 'created'
+            ORDER BY created_on ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id, name, data
+    "#;
+    // ...
 }
 ```
 
-**Usage**:
-```typescript
-async (context: JobContext) => {
-  const { db, logger, jobId, jobName, data } = context;
-  
-  logger.debug('Processing job', { jobId, jobName });
-  
-  // Use db for database operations
-  const result = await db.query.table.findMany();
-  
-  // Use logger with automatic context
-  logger.info('Job completed', { result });
-}
-```
+**Job lifecycle states** (in `pgboss.job.state`):
+
+| State       | Meaning                              |
+|-------------|--------------------------------------|
+| `created`   | Queued, awaiting pickup              |
+| `active`    | Claimed and being executed           |
+| `completed` | Handler returned successfully        |
+| `failed`    | Handler panicked or returned `Err`   |
+
+After the handler's `JoinHandle` resolves, the poller updates the row to `completed` or `failed`.
 
 ---
 
 ## Error Handling
 
-### Automatic Retries
+If the `pgboss` schema does not exist (e.g. before migrations run), the poll errors are logged at `TRACE` level and the loop backs off for 10 seconds:
 
-pg-boss automatically retries failed jobs with exponential backoff:
-
-```typescript
-// Default retry configuration (in jobs.ts)
-{
-  retryLimit: 2,          // Retry up to 2 times
-  retryDelay: 5,          // 5 seconds initial delay
-  retryBackoff: true,     // Exponential: 5s, 10s, 20s...
+```rust
+Err(e) => {
+    // pg-boss tables might not exist yet — that's ok
+    tracing::trace!(error = %e, "Job poll error (pgboss tables may not exist)");
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 }
 ```
 
-### Error Logging
+If no registered handler exists for a job name, the job is immediately marked `failed`:
 
-```typescript
-scheduler.registerCron('job-name', '0 3 * * *', async (context) => {
-  const { logger, jobId } = context;
-  
-  try {
-    await performWork();
-    logger.info('Job succeeded', { jobId });
-  } catch (error) {
-    logger.error({ error, jobId }, 'Job failed - will retry');
-    throw error; // Let pg-boss handle retry
-  }
-});
+```rust
+tracing::warn!(job_name, "No handler registered for job");
+// UPDATE pgboss.job SET state = 'failed' ...
 ```
-
-**Important**: Always throw errors to trigger pg-boss retry logic.
 
 ---
 
-## Manual Job Triggering
+## Health Check
 
-Trigger jobs manually via API or code:
-
-```typescript
-// In a handler or service
-const jobScheduler = ctx.get('jobScheduler');
-
-// Trigger without data
-const jobId = await jobScheduler.trigger('module.task');
-
-// Trigger with data
-const jobId = await jobScheduler.trigger('module.process', {
-  entityId: '123',
-  action: 'update'
-});
-
-logger.info('Job triggered', { jobId });
+```rust
+pub async fn health(&self) -> Result<serde_json::Value, String>
 ```
+
+Returns a JSON summary of job counts by state:
+
+```json
+{
+  "pending":   3,
+  "active":    1,
+  "completed": 847,
+  "failed":    2
+}
+```
+
+---
+
+## Stopping the Scheduler
+
+```rust
+pub async fn stop(&self)
+```
+
+Sets the internal `running` flag to `false`. The poll loop checks this flag on each iteration and exits cleanly.
+
+---
+
+## Module Structure
+
+Jobs are defined alongside the handlers they belong to:
+
+```
+src/handlers/[module]/
+├── mod.rs          # Router + handlers
+├── repo.rs         # SeaORM queries
+└── jobs.rs         # Job registration helpers (optional)
+```
+
+Registration is called from `main.rs` or a central `register_jobs` function after the `AppContext` is built.
 
 ---
 
 ## Real-World Examples
 
-### Example 1: Audit Log Retention (Cron)
+### Audit Log Retention (Cron-style via pg-boss)
 
-```typescript
-// src/handlers/audit/jobs/index.ts
-scheduler.registerCron('audit.retention', '0 3 * * *', async (context) => {
-  const { db, logger } = context;
-  
-  const { AuditRepository } = await import('../repos/audit.repo');
-  const auditRepo = new AuditRepository(db, logger);
-  
-  // Archive logs older than 1 year
-  const archived = await auditRepo.archiveOldLogs(365);
-  
-  // Purge logs older than 7 years (HIPAA)
-  const purged = await auditRepo.purgeArchivedLogs(2555);
-  
-  logger.info('Audit retention complete', { archived, purged });
-});
+```rust
+// Triggered once daily by an external cron or pg-boss schedule
+scheduler.register("audit.retention", move |_data| {
+    let db = db.clone();
+    tokio::spawn(async move {
+        tracing::info!("Starting audit retention job");
+
+        // Archive logs older than 1 year
+        let archived = audit_repo::archive_old_logs(&db, 365).await;
+
+        // Purge logs older than 7 years (HIPAA)
+        let purged = audit_repo::purge_archived_logs(&db, 2555).await;
+
+        tracing::info!(?archived, ?purged, "Audit retention complete");
+    })
+}).await;
 ```
 
-### Example 2: Email Queue Processing (Interval)
+### Email Queue Processing (Interval)
 
-```typescript
-// src/handlers/email/jobs/index.ts
-scheduler.registerInterval('email.process-queue', 30000, async (context) => {
-  const { db, logger } = context;
-  
-  const emailService = ctx.get('emailService');
-  await emailService.processPendingEmails();
-  
-  logger.debug('Email queue processed');
-});
+```rust
+scheduler.register("email.process-queue", move |_data| {
+    let email_service = email_service.clone();
+    tokio::spawn(async move {
+        if let Err(e) = email_service.process_pending().await {
+            tracing::error!(error = %e, "Email queue processing failed");
+        }
+    })
+}).await;
 ```
 
-### Example 3: Notification Cleanup (Interval)
+### Notification Cleanup
 
-```typescript
-scheduler.registerInterval('notifs.cleanup', 3600000, async (context) => {
-  const { db, logger } = context;
-  
-  const { NotificationRepository } = await import('../repos/notification.repo');
-  const notifRepo = new NotificationRepository(db, logger);
-  
-  // Clean up notifications older than 90 days
-  const cleaned = await notifRepo.cleanupExpiredNotifications(90);
-  
-  logger.info('Notification cleanup complete', { cleaned });
-});
+```rust
+scheduler.register("notifs.cleanup", move |_data| {
+    let db = db.clone();
+    tokio::spawn(async move {
+        // Clean up notifications older than 90 days
+        match notif_repo::cleanup_expired(&db, 90).await {
+            Ok(n) => tracing::info!(cleaned = n, "Notification cleanup complete"),
+            Err(e) => tracing::error!(error = %e, "Notification cleanup failed"),
+        }
+    })
+}).await;
 ```
 
 ---
 
 ## Monitoring
 
-### Health Check
+### Health Endpoint
 
-```typescript
-const health = await jobScheduler.getHealth();
-// Returns: { healthy: boolean, queueSize?: number }
-```
-
-### Queue Size
-
-```typescript
-const size = await jobScheduler.getQueueSize('module.task');
-// Returns number of pending jobs
-```
+The `/readyz` endpoint includes job scheduler health via `JobScheduler::health()`.
 
 ### Logging
 
-All job operations are logged with structured data:
+All job operations emit structured `tracing` events:
 
-```json
-{
-  "job": "module.task",
-  "jobId": "abc-123",
-  "level": "info",
-  "msg": "Job completed successfully"
-}
+```
+INFO Job triggered    job_id="abc-123" job_name="audit.retention"
+INFO Processing job   job_id="abc-123" job_name="audit.retention"
+INFO Job completed    job_id="abc-123"
+ERROR Job failed      job_id="abc-123" error="..."
 ```
 
 ---
 
 ## Best Practices
 
-1. **Lazy Import Repositories**: Import repositories inside job handlers to avoid circular dependencies
-2. **Always Throw Errors**: Let pg-boss handle retries automatically
-3. **Use Structured Logging**: Include `jobId` and relevant context in logs
-4. **Keep Jobs Idempotent**: Jobs may be retried, ensure they can run multiple times safely
-5. **Set Appropriate Intervals**: Minimum 1 minute for interval jobs
-6. **Use Cron for Schedules**: Prefer cron syntax over intervals for specific times
-7. **Monitor Job Health**: Check queue sizes and health status in production
-8. **Reference pg-boss Docs**: For advanced features (priorities, deadlines, etc.)
+1. **Keep handlers idempotent**: Jobs may be re-triggered; ensure they can run multiple times safely
+2. **Avoid long-running blocking work**: Use `tokio::task::spawn_blocking` for CPU-heavy or synchronous code
+3. **Log with job context**: Always include the job ID in structured log fields
+4. **Handle errors explicitly**: Return `Err` or panic only when the job truly cannot proceed; the scheduler marks it `failed`
+5. **Use `SKIP LOCKED`**: The poller already does this — safe to run multiple API instances
+6. **Check pg-boss table existence**: Migrations must create the `pgboss` schema before jobs can run
 
 ---
 
-## Testing
+## Commands
 
-Jobs are automatically started in test environments. Test by triggering manually:
+```bash
+# Run the API (starts job scheduler automatically)
+cargo run
 
-```typescript
-// In test file
-const jobScheduler = app.get('jobScheduler');
+# Run with debug logging to see job poll events
+RUST_LOG=debug cargo run
 
-// Trigger job
-const jobId = await jobScheduler.trigger('module.task', { test: true });
+# Run tests (job scheduler is not started in unit tests)
+cargo test
 
-// Wait for completion (in tests)
-await new Promise(resolve => setTimeout(resolve, 1000));
-
-// Verify results in database
-```
-
----
-
-## Configuration
-
-Job scheduler configuration in `src/core/jobs.ts`:
-
-```typescript
-{
-  schema: 'pgboss',                        // Isolated pg-boss tables
-  deleteAfterDays: 1,                      // Cleanup completed jobs
-  archiveCompletedAfterSeconds: 300,       // Archive after 5 minutes
-  retryLimit: 2,                           // Default retry count
-  retryDelay: 5,                           // Initial retry delay (seconds)
-  expireInMinutes: 5,                      // Job expiration
-  maintenanceIntervalSeconds: 10,          // Maintenance frequency
-}
+# Run a specific test
+cargo test jobs
 ```
 
 ---
 
 ## Troubleshooting
 
-### Job Not Running
+### Jobs Not Running
 
-1. Check if job is registered: `jobScheduler.getQueueSize('job-name')`
-2. Verify cron pattern: Use [crontab.guru](https://crontab.guru/)
-3. Check logs for errors during registration
-4. Ensure job scheduler is started: `await jobScheduler.start()`
+1. Verify the handler name matches the `name` column in `pgboss.job`
+2. Check startup logs for `"Job scheduler started"` — confirms `start()` was called
+3. Verify the `pgboss` schema exists: `SELECT * FROM pgboss.job LIMIT 1;`
+4. Check for `WARN No handler registered for job` log entries
 
-### Jobs Stuck in Queue
+### Jobs Stuck in `active` State
 
-1. Check worker is registered: Review startup logs
-2. Verify database connection is active
-3. Check for deadlocks: Review pg-boss schema logs
-4. Restart job scheduler: `await jobScheduler.shutdown()` then `start()`
+This means the server crashed while a job was running. Reset manually:
 
-### High Retry Rate
+```sql
+UPDATE pgboss.job SET state = 'created', started_on = NULL WHERE state = 'active';
+```
 
-1. Fix underlying error in job handler
-2. Adjust retry configuration if needed
-3. Add more detailed error logging
-4. Consider implementing circuit breaker pattern
+### High Failure Rate
 
----
-
-**For complete pg-boss features**, see [pg-boss documentation](https://github.com/timgit/pg-boss/blob/master/docs/readme.md).
+1. Check `tracing` logs for `ERROR Job failed` entries
+2. Review handler logic for panics or unhandled `Err` values
+3. Confirm the database connection is stable

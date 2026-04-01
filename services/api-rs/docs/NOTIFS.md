@@ -2,184 +2,231 @@
 
 ## Overview
 
-The Monobase Application Platform implements a comprehensive multi-channel notification system that ensures patients, providers, and administrators stay informed throughout all healthcare workflows. The system supports in-app, email, and SMS delivery with priority-based routing and non-blocking error handling.
+The Monobase Rust API implements a multi-channel notification system that ensures patients, providers, and administrators stay informed throughout all healthcare workflows. The system supports in-app, push, and email delivery with non-blocking error handling.
 
 ## Architecture
 
 ### Core Components
 
-- **NotificationService** (`@/core/notifs`): Central service for creating and managing notifications
-- **Multi-channel delivery**: Supports in-app, email, and SMS channels
-- **Priority system**: High, normal priority levels for different notification types
+- **NotificationService** (`src/service/notifs.rs`): Central service for push notification delivery via OneSignal
+- **EmailService** (`src/service/email.rs`): Email delivery (delegated from NotificationService for email channel)
+- **WebSocketService** (`src/service/ws.rs`): In-app real-time delivery via broadcast channels
 - **Non-blocking design**: Notification failures don't interrupt primary workflows
-- **Comprehensive logging**: Full audit trail for all notification activities
+- **Structured logging**: Full audit trail via `tracing`
 
 ### Integration Points
 
-The notification system is integrated across all major healthcare workflows:
+The notification system integrates across all major healthcare workflows:
 - Appointment booking lifecycle
 - Payment processing workflows
 - Provider confirmation processes
 - Automated background jobs
+
+## NotificationService
+
+Location: `src/service/notifs.rs`
+
+```rust
+pub struct NotificationService {
+    onesignal_app_id: Option<String>,
+    onesignal_api_key: Option<String>,
+}
+
+impl NotificationService {
+    pub fn new(config: &Config) -> Self { /* ... */ }
+    pub fn is_configured(&self) -> bool {
+        self.onesignal_app_id.is_some() && self.onesignal_api_key.is_some()
+    }
+}
+```
+
+### Push Notifications via OneSignal
+
+The service calls the OneSignal REST API via `reqwest`. Targeting uses OneSignal's `external_id` field (mapped to the Monobase person ID):
+
+```rust
+pub async fn send_push(
+    &self,
+    external_id: &str,   // Monobase person ID
+    title: &str,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Result<String, String>
+```
+
+The `reqwest::Client` call posts to `https://onesignal.com/api/v1/notifications` with `Authorization: Basic {ONESIGNAL_API_KEY}`.
+
+### Multi-channel Delivery
+
+```rust
+pub async fn deliver(
+    &self,
+    channel: &str,
+    recipient_id: &str,
+    title: &str,
+    message: &str,
+    data: Option<serde_json::Value>,
+) -> Result<(), String> {
+    match channel {
+        "push"   => { self.send_push(recipient_id, title, message, data).await?; }
+        "email"  => { /* delegate to EmailService */ }
+        "in-app" => { /* stored in DB, delivered via WebSocketService */ }
+        _        => return Err(format!("Unknown notification channel: {}", channel)),
+    }
+    Ok(())
+}
+```
 
 ## Notification Types
 
 ### 1. Appointment Workflow Notifications
 
 #### 1.1 Appointment Confirmed (`appointment_confirmed`)
-**Trigger**: Provider confirms a pending appointment  
-**Recipients**: Patient  
-**Channels**: in-app, email, SMS  
-**Priority**: high  
-**Location**: `confirmAppointment.ts:98-111`
+**Trigger**: Provider confirms a pending appointment
+**Recipients**: Patient
+**Channels**: in-app, email, SMS
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  providerId: string;
-  confirmedAt: string; // ISO timestamp
-  scheduledAt: string; // ISO timestamp
+  "appointmentId": "string",
+  "providerId": "string",
+  "confirmedAt": "ISO timestamp",
+  "scheduledAt": "ISO timestamp"
 }
 ```
 
 **Message**: "Your appointment has been confirmed by the provider."
 
 #### 1.2 Appointment Confirmation Sent (`appointment_confirmation_sent`)
-**Trigger**: Provider confirms a pending appointment  
-**Recipients**: Provider  
-**Channels**: in-app  
-**Priority**: normal  
-**Location**: `confirmAppointment.ts:114-126`
+**Trigger**: Provider confirms a pending appointment
+**Recipients**: Provider
+**Channels**: in-app
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  clientId: string;
-  confirmedAt: string; // ISO timestamp
+  "appointmentId": "string",
+  "clientId": "string",
+  "confirmedAt": "ISO timestamp"
 }
 ```
 
 **Message**: "Appointment confirmation has been sent to the patient."
 
 #### 1.3 Appointment Cancelled by You (`appointment_cancelled_by_you`)
-**Trigger**: User cancels their own appointment  
-**Recipients**: Cancelling user (patient or provider)  
-**Channels**: in-app  
-**Priority**: normal  
-**Location**: `cancelAppointment.ts:123-137`
+**Trigger**: User cancels their own appointment
+**Recipients**: Cancelling user (patient or provider)
+**Channels**: in-app
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  reason: string;
-  cancelledAt: string; // ISO timestamp
-  scheduledAt: string; // ISO timestamp
-  cancelledBy: 'client' | 'provider';
+  "appointmentId": "string",
+  "reason": "string",
+  "cancelledAt": "ISO timestamp",
+  "scheduledAt": "ISO timestamp",
+  "cancelledBy": "client | provider"
 }
 ```
 
 **Message**: "You have successfully cancelled your appointment. The [other party] has been notified."
 
 #### 1.4 Appointment Cancelled by Other (`appointment_cancelled_by_other`)
-**Trigger**: Other party cancels the appointment  
-**Recipients**: Non-cancelling party  
-**Channels**: in-app, email, SMS  
-**Priority**: high  
-**Location**: `cancelAppointment.ts:140-155`
+**Trigger**: Other party cancels the appointment
+**Recipients**: Non-cancelling party
+**Channels**: in-app, email, SMS
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  reason: string;
-  cancelledAt: string; // ISO timestamp
-  scheduledAt: string; // ISO timestamp
-  cancelledBy: 'client' | 'provider';
-  cancelledById: string;
+  "appointmentId": "string",
+  "reason": "string",
+  "cancelledAt": "ISO timestamp",
+  "scheduledAt": "ISO timestamp",
+  "cancelledBy": "client | provider",
+  "cancelledById": "string"
 }
 ```
 
 **Message**: "Your appointment has been cancelled by the [canceller]. Reason: [reason]"
 
 #### 1.5 Appointment Rejected (`appointment_rejected`)
-**Trigger**: Provider rejects a pending appointment  
-**Recipients**: Patient  
-**Channels**: in-app, email, SMS  
-**Priority**: high  
-**Location**: `rejectAppointment.ts:121-136`
+**Trigger**: Provider rejects a pending appointment
+**Recipients**: Patient
+**Channels**: in-app, email, SMS
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  providerId: string;
-  rejectedAt: string; // ISO timestamp
-  scheduledAt: string; // ISO timestamp
-  reason: string;
-  slotReleased: string; // slot ID
+  "appointmentId": "string",
+  "providerId": "string",
+  "rejectedAt": "ISO timestamp",
+  "scheduledAt": "ISO timestamp",
+  "reason": "string",
+  "slotReleased": "slot ID"
 }
 ```
 
 **Message**: "Your appointment request has been rejected by the provider. Reason: [reason]"
 
 #### 1.6 Appointment Rejection Sent (`appointment_rejection_sent`)
-**Trigger**: Provider rejects a pending appointment  
-**Recipients**: Provider  
-**Channels**: in-app  
-**Priority**: normal  
-**Location**: `rejectAppointment.ts:139-153`
+**Trigger**: Provider rejects a pending appointment
+**Recipients**: Provider
+**Channels**: in-app
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  clientId: string;
-  rejectedAt: string; // ISO timestamp
-  reason: string;
-  slotReleased: string; // slot ID
+  "appointmentId": "string",
+  "clientId": "string",
+  "rejectedAt": "ISO timestamp",
+  "reason": "string",
+  "slotReleased": "slot ID"
 }
 ```
 
 **Message**: "Appointment rejection has been sent to the patient. The time slot is now available."
 
 #### 1.7 Appointment Auto-Rejected (`appointment_auto_rejected`)
-**Trigger**: Confirmation timer job - provider doesn't confirm within 15 minutes  
-**Recipients**: Patient  
-**Channels**: in-app, email, SMS  
-**Priority**: high  
-**Location**: `confirmationTimer.ts:180-194`
+**Trigger**: Confirmation timer job — provider doesn't confirm within 15 minutes
+**Recipients**: Patient
+**Channels**: in-app, email, SMS
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  providerId: string;
-  scheduledAt: string; // ISO timestamp
-  autoRejectedAt: string; // ISO timestamp
-  reason: 'Provider did not confirm within 15 minutes';
+  "appointmentId": "string",
+  "providerId": "string",
+  "scheduledAt": "ISO timestamp",
+  "autoRejectedAt": "ISO timestamp",
+  "reason": "Provider did not confirm within 15 minutes"
 }
 ```
 
 **Message**: "Your appointment request has expired as the provider did not confirm within 15 minutes."
 
 #### 1.8 Appointment Expired (`appointment_expired`)
-**Trigger**: Confirmation timer job - provider doesn't confirm within 15 minutes  
-**Recipients**: Provider  
-**Channels**: in-app, email  
-**Priority**: normal  
-**Location**: `confirmationTimer.ts:197-211`
+**Trigger**: Confirmation timer job — provider doesn't confirm within 15 minutes
+**Recipients**: Provider
+**Channels**: in-app, email
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  clientId: string;
-  scheduledAt: string; // ISO timestamp
-  autoRejectedAt: string; // ISO timestamp
-  missedDeadline: true;
+  "appointmentId": "string",
+  "clientId": "string",
+  "scheduledAt": "ISO timestamp",
+  "autoRejectedAt": "ISO timestamp",
+  "missedDeadline": true
 }
 ```
 
@@ -188,104 +235,99 @@ The notification system is integrated across all major healthcare workflows:
 ### 2. Payment Workflow Notifications
 
 #### 2.1 Payment Authorized (`payment_authorized`)
-**Trigger**: Stripe webhook - payment_intent.succeeded event  
-**Recipients**: Patient  
-**Channels**: in-app, email  
-**Priority**: normal  
-**Location**: `stripeWebhook.ts:177-191`
+**Trigger**: Stripe webhook — `payment_intent.succeeded` event
+**Recipients**: Patient
+**Channels**: in-app, email
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  paymentIntentId: string;
-  amount: number; // in cents
-  currency: string;
-  status: 'authorized';
+  "appointmentId": "string",
+  "paymentIntentId": "string",
+  "amount": 0,
+  "currency": "usd",
+  "status": "authorized"
 }
 ```
 
 **Message**: "Your payment has been authorized and is being held until the appointment is completed."
 
 #### 2.2 Payment Captured (`payment_captured`)
-**Trigger**: Stripe webhook - charge.succeeded event  
-**Recipients**: Patient  
-**Channels**: in-app, email  
-**Priority**: normal  
-**Location**: `stripeWebhook.ts:333-348`
+**Trigger**: Stripe webhook — `charge.succeeded` event
+**Recipients**: Patient
+**Channels**: in-app, email
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  chargeId: string;
-  amount: number; // in cents
-  currency: string;
-  status: 'captured';
-  capturedAt: string; // ISO timestamp
+  "appointmentId": "string",
+  "chargeId": "string",
+  "amount": 0,
+  "currency": "usd",
+  "status": "captured",
+  "capturedAt": "ISO timestamp"
 }
 ```
 
 **Message**: "Your payment has been successfully processed and captured."
 
 #### 2.3 Payment Received (`payment_received`)
-**Trigger**: Stripe webhook - charge.succeeded event  
-**Recipients**: Provider  
-**Channels**: in-app, email  
-**Priority**: normal  
-**Location**: `stripeWebhook.ts:351-366`
+**Trigger**: Stripe webhook — `charge.succeeded` event
+**Recipients**: Provider
+**Channels**: in-app, email
+**Priority**: normal
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  chargeId: string;
-  transferId: string;
-  amount: number; // in cents
-  currency: string;
-  clientId: string;
+  "appointmentId": "string",
+  "chargeId": "string",
+  "transferId": "string",
+  "amount": 0,
+  "currency": "usd",
+  "clientId": "string"
 }
 ```
 
 **Message**: "Payment for your appointment has been processed and will be transferred to your account."
 
 #### 2.4 Payment Failed (`payment_failed`)
-**Trigger**: Stripe webhook - payment_intent.payment_failed event  
-**Recipients**: Patient  
-**Channels**: in-app, email, SMS  
-**Priority**: high  
-**Location**: `stripeWebhook.ts:239-253`
+**Trigger**: Stripe webhook — `payment_intent.payment_failed` event
+**Recipients**: Patient
+**Channels**: in-app, email, SMS
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  paymentIntentId: string;
-  failureReason: string;
-  status: 'failed';
-  failedAt: string; // ISO timestamp
+  "appointmentId": "string",
+  "paymentIntentId": "string",
+  "failureReason": "string",
+  "status": "failed",
+  "failedAt": "ISO timestamp"
 }
 ```
 
 **Message**: "Your payment could not be processed. Please update your payment method and try again."
 
 #### 2.5 Charge Failed (`charge_failed`)
-**Trigger**: Stripe webhook - charge.failed event  
-**Recipients**: Patient  
-**Channels**: in-app, email  
-**Priority**: high  
-**Location**: `stripeWebhook.ts:456-472`
+**Trigger**: Stripe webhook — `charge.failed` event
+**Recipients**: Patient
+**Channels**: in-app, email
+**Priority**: high
 
 **Data Payload**:
-```typescript
+```json
 {
-  appointmentId: string;
-  chargeId: string;
-  paymentIntentId: string;
-  failureCode: string;
-  failureMessage: string;
-  status: 'failed';
-  failedAt: string; // ISO timestamp
+  "appointmentId": "string",
+  "chargeId": "string",
+  "paymentIntentId": "string",
+  "failureCode": "string",
+  "failureMessage": "string",
+  "status": "failed",
+  "failedAt": "ISO timestamp"
 }
 ```
 
@@ -293,85 +335,101 @@ The notification system is integrated across all major healthcare workflows:
 
 ## Implementation Patterns
 
-### 1. Service Injection
+### 1. Accessing the Service
 
-All handlers that create notifications follow this pattern:
+`NotificationService` is available on the `AppContext`:
 
-```typescript
-// Import notification service type
-import type { NotificationService } from '@/core/notifs';
+```rust
+pub async fn confirm_appointment(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(appointment_id): Path<Uuid>,
+) -> Result<Json<AppointmentResponse>, ApiError> {
+    // ... business logic ...
 
-// Get service from context
-const notificationService = ctx.get('notificationService') as NotificationService;
-```
+    // Non-blocking notification
+    let notifs = ctx.notifs.clone();
+    tokio::spawn(async move {
+        if let Err(e) = notifs.deliver(
+            "push",
+            &patient_id,
+            "Appointment Confirmed",
+            "Your appointment has been confirmed by the provider.",
+            Some(serde_json::json!({ "appointmentId": appointment_id })),
+        ).await {
+            tracing::error!(error = %e, "Failed to send push notification");
+        }
+    });
 
-### 2. Notification Creation
-
-Standard notification creation pattern:
-
-```typescript
-try {
-  await notificationService.createNotification({
-    recipientId: userId,
-    type: 'notification_type',
-    title: 'Human readable title',
-    message: 'Detailed message for user',
-    data: {
-      // Relevant data payload
-    },
-    channels: ['in-app', 'email', 'sms'],
-    priority: 'high' | 'normal'
-  });
-
-  logger?.info({ /* context */ }, 'Notification sent successfully');
-} catch (error) {
-  // Non-blocking error handling
-  logger?.error({ error }, 'Failed to send notification');
+    Ok(Json(appointment.into()))
 }
 ```
 
-### 3. Error Handling
+### 2. Non-Blocking Error Handling
 
-All notification implementations use non-blocking error handling:
-- Notification failures don't interrupt primary workflows
-- Comprehensive error logging for troubleshooting
-- Graceful degradation when notification service is unavailable
+All notification sends use `tokio::spawn` so failures don't interrupt the primary handler:
 
-### 4. Audit Logging
-
-Each notification integration includes detailed audit logging:
-- Success and failure events
-- Recipient information
-- Context data (appointment IDs, payment IDs)
-- Timestamps and user actions
-
-## Background Jobs Integration
-
-### Confirmation Timer Job
-
-**Location**: `confirmationTimer.ts`  
-**Schedule**: Every minute  
-**Extended Context**: Includes `NotificationService` via job wrapper
-
-The confirmation timer job required special integration:
-1. Extended `JobContext` interface to include `NotificationService`
-2. Modified `registerBookingJobs` to accept and inject notification service
-3. Updated job registration in `app.ts` to pass notification service
-
-```typescript
-// Job wrapper that injects notification service
-scheduler.registerInterval('booking.confirmationTimer', 60000, async (context) => {
-  const extendedContext = {
-    ...context,
-    notificationService
-  };
-  await confirmationTimerJob(extendedContext as any);
+```rust
+let notifs = ctx.notifs.clone();
+tokio::spawn(async move {
+    match notifs.deliver("push", &recipient_id, title, message, data).await {
+        Ok(_) => tracing::info!(recipient = %recipient_id, "Notification sent"),
+        Err(e) => tracing::error!(error = %e, "Notification send failed"),
+    }
 });
 ```
 
-## Configuration and Channels
+### 3. In-App Notifications via WebSocket
 
-### Channel Priority
+In-app notifications are stored in the database and then published through the `WebSocketService`:
+
+```rust
+// Store in DB, then publish via WebSocket
+ctx.ws.publish_to_user(
+    &recipient_id,
+    "notification.new",
+    serde_json::json!({
+        "id": notification_id,
+        "type": notification_type,
+        "title": title,
+        "message": message,
+    }),
+).await;
+```
+
+### 4. Audit Logging
+
+Each notification includes structured `tracing` fields:
+
+```rust
+tracing::info!(
+    provider = "onesignal",
+    external_id = external_id,
+    title = title,
+    "Push notification sent"
+);
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+ONESIGNAL_APP_ID=your-app-id
+ONESIGNAL_API_KEY=your-rest-api-key
+```
+
+When these are absent, `is_configured()` returns `false` and push delivery is skipped with a logged warning.
+
+### OneSignal App-Agnostic Pattern
+
+OneSignal uses `external_id` (the Monobase person ID) to target users across devices and apps. A single `ONESIGNAL_APP_ID` is shared across all frontends:
+
+- Frontend apps set `VITE_ONESIGNAL_APP_ID` to the same value
+- The Rust API uses `ONESIGNAL_APP_ID` to send notifications
+- Users with both patient and provider roles receive notifications in whichever app they're currently using
+
+## Channel Priority
 
 - **High Priority Notifications**: in-app + email + SMS
   - Payment failures
@@ -387,54 +445,38 @@ scheduler.registerInterval('booking.confirmationTimer', 60000, async (context) =
   - Provider confirmations
   - Administrative notifications
 
-### Message Personalization
-
-All notifications include:
-- Dynamic user names and roles
-- Contextual information (appointment times, reasons)
-- Clear action items when applicable
-- Professional healthcare-appropriate language
-
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Notification Service Not Available**
-   - Check service injection in handler
-   - Verify `notificationService` is available in context
-   - Review application startup logs
+1. **OneSignal Not Configured**
+   - Verify `ONESIGNAL_APP_ID` and `ONESIGNAL_API_KEY` are set in the environment
+   - Check `NotificationService::is_configured()` returns `true` at startup
 
-2. **Background Job Notifications Failing**
-   - Ensure notification service is passed to job registration
-   - Check extended job context implementation
-   - Verify job wrapper includes notification service
+2. **Push Notifications Not Received**
+   - Confirm the `external_id` matches the person ID registered in OneSignal
+   - Check OneSignal dashboard for delivery logs
+   - Verify the app has push permission granted by the user
 
-3. **Missing Notifications**
-   - Check error logs for notification creation failures
-   - Verify recipient IDs are valid
-   - Confirm notification channels are configured
+3. **Missing In-App Notifications**
+   - Check the WebSocket connection is active for the recipient
+   - Verify `WebSocketService::publish_to_user` returns `true` (user connected)
 
 ### Debugging
 
-Enable detailed logging for notification troubleshooting:
+```bash
+# Enable debug logging to see all notification attempts
+RUST_LOG=debug cargo run
 
-```typescript
-logger?.debug({
-  recipientId,
-  notificationType,
-  channels,
-  priority,
-  data
-}, 'Creating notification');
+# Example output:
+# DEBUG Creating notification provider=onesignal external_id="user-123"
+# INFO  Push notification sent provider=onesignal external_id="user-123" title="Appointment Confirmed"
 ```
 
 ## Future Enhancements
 
-Planned improvements to the notification system:
-
-1. **Template System**: Configurable notification templates
-2. **User Preferences**: Per-user channel preferences
-3. **Delivery Confirmation**: Read receipts and delivery status
+1. **Template System**: Configurable notification templates stored in the database
+2. **User Preferences**: Per-user channel preferences (opt-out of SMS, etc.)
+3. **Delivery Confirmation**: Read receipts and OneSignal delivery webhooks
 4. **Batch Notifications**: Efficient bulk notification sending
-5. **Real-time Delivery**: WebSocket integration for instant in-app notifications
-6. **Advanced Scheduling**: Timezone-aware notification scheduling
+5. **Advanced Scheduling**: Timezone-aware notification scheduling

@@ -6,9 +6,9 @@ WebRTC-based video consultation system using browser native APIs with self-hoste
 
 **Architecture:**
 - Browser native WebRTC (RTCPeerConnection)
-- Self-hosted WebSocket signaling (Bun + Hono)
-- Configurable STUN/TURN servers
-- Database-backed call state management
+- Self-hosted WebSocket signaling (Axum + `WebSocketService`)
+- Configurable STUN/TURN servers via `WEBRTC_ICE_SERVERS` environment variable
+- Database-backed call state management (SeaORM)
 - P2P direct audio/video streams
 
 ---
@@ -93,7 +93,7 @@ flowchart TD
         D[MediaDevices] --> A
     end
 
-    subgraph "Backend (services/api)"
+    subgraph "Backend (services/api-rs)"
         E[WebSocket Handler] --> F[ChatRoomRepository]
         E --> G[ChatMessageRepository]
         H[REST Handlers] --> F
@@ -121,101 +121,70 @@ flowchart TD
 GET /ws/comms/chat-rooms/:room
 ```
 
-**Authentication:** Required (session token via middleware)
+**Authentication:** Required (session token via `AuthUser` extractor)
 **Authorization:** User must be participant in chat room
 
 ### Connection Lifecycle
 
-**onConnect:**
-- Verify room exists
+**onConnect (Axum `on_upgrade` callback):**
+- Verify room exists (SeaORM query)
 - Verify user is participant (via patient/provider profiles)
-- Track connection in channel: `chat-rooms/{roomId}`
+- Subscribe to channel: `chat-rooms/{roomId}` via `WebSocketService::subscribe_channel`
 - Send `connected` event to client
-- Broadcast `user.joined` event to channel (excluding sender)
+- Publish `user.joined` event to channel (excluding sender)
 
-**onMessage:**
+**Message loop:**
 - Parse JSON message with `{type, data}`
 - Route based on message type
-- Relay signaling messages to channel participants
+- Relay signaling messages to channel participants via `WebSocketService::publish_to_channel`
 
-**onClose:**
-- Untrack connection from channel
-- Broadcast `user.left` event to channel
+**onClose (socket stream exhausted):**
+- Unsubscribe from channel
+- Publish `user.left` event to channel
 
 ### Message Types
 
 #### 1. Video Signaling Messages
 
 **video.offer**
-```typescript
-{
-  type: 'video.offer',
-  data: RTCSessionDescriptionInit
-}
+```json
+{ "type": "video.offer", "data": "<RTCSessionDescriptionInit>" }
 ```
 Relayed as:
-```typescript
-{
-  type: 'video.offer',
-  from: string,  // userId (added by server)
-  data: RTCSessionDescriptionInit
-}
+```json
+{ "type": "video.offer", "from": "<userId>", "data": "<RTCSessionDescriptionInit>" }
 ```
 
 **video.answer**
-```typescript
-{
-  type: 'video.answer',
-  data: RTCSessionDescriptionInit
-}
+```json
+{ "type": "video.answer", "data": "<RTCSessionDescriptionInit>" }
 ```
 Relayed as:
-```typescript
-{
-  type: 'video.answer',
-  from: string,
-  data: RTCSessionDescriptionInit
-}
+```json
+{ "type": "video.answer", "from": "<userId>", "data": "<RTCSessionDescriptionInit>" }
 ```
 
 **video.ice-candidate**
-```typescript
-{
-  type: 'video.ice-candidate',
-  data: RTCIceCandidateInit
-}
+```json
+{ "type": "video.ice-candidate", "data": "<RTCIceCandidateInit>" }
 ```
 Relayed as:
-```typescript
-{
-  type: 'video.ice-candidate',
-  from: string,
-  data: RTCIceCandidateInit
-}
+```json
+{ "type": "video.ice-candidate", "from": "<userId>", "data": "<RTCIceCandidateInit>" }
 ```
 
 #### 2. Chat Messages
 
 **chat.message**
-```typescript
-{
-  type: 'chat.message',
-  data: {
-    text: string  // max 5000 chars
-  }
-}
+```json
+{ "type": "chat.message", "data": { "text": "string (max 5000 chars)" } }
 ```
-- Persisted to database
+- Persisted to database via `ChatMessageRepository`
 - Full message object broadcast to channel
 
 **chat.typing**
-```typescript
-{
-  type: 'chat.typing',
-  data: {
-    isTyping: boolean
-  }
-}
+```json
+{ "type": "chat.typing", "data": { "isTyping": true } }
 ```
 - Not persisted
 - Relayed to channel participants
@@ -223,65 +192,34 @@ Relayed as:
 #### 3. Heartbeat
 
 **ping**
-```typescript
-{
-  type: 'ping'
-}
+```json
+{ "type": "ping" }
 ```
 Response:
-```typescript
-{
-  event: 'pong',
-  payload: {
-    timestamp: string  // ISO 8601
-  }
-}
+```json
+{ "event": "pong", "payload": { "timestamp": "<ISO 8601>" } }
 ```
 
 ### Server Events
 
 **connected**
-```typescript
-{
-  event: 'connected',
-  payload: {
-    roomId: string,
-    userId: string,
-    timestamp: string
-  }
-}
+```json
+{ "event": "connected", "payload": { "roomId": "string", "userId": "string", "timestamp": "string" } }
 ```
 
 **user.joined**
-```typescript
-{
-  event: 'user.joined',
-  payload: {
-    userId: string,
-    timestamp: string
-  }
-}
+```json
+{ "event": "user.joined", "payload": { "userId": "string", "timestamp": "string" } }
 ```
 
 **user.left**
-```typescript
-{
-  event: 'user.left',
-  payload: {
-    userId: string,
-    timestamp: string
-  }
-}
+```json
+{ "event": "user.left", "payload": { "userId": "string", "timestamp": "string" } }
 ```
 
 **error**
-```typescript
-{
-  event: 'error',
-  payload: {
-    message: string
-  }
-}
+```json
+{ "event": "error", "payload": { "message": "string" } }
 ```
 
 ---
@@ -297,19 +235,18 @@ GET /comms/ice-servers
 **Authentication:** Not required
 **Response:** 200 OK
 
-```typescript
+```json
 {
-  iceServers: Array<{
-    urls: string | string[],
-    username?: string,
-    credential?: string
-  }>
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun1.l.google.com:19302" }
+  ]
 }
 ```
 
 **Configuration:**
-- Set via `WEBRTC_ICE_SERVERS` environment variable (JSON array)
-- Default: Google public STUN servers
+- `WEBRTC_ICE_SERVERS` env variable — comma-separated list of STUN/TURN URLs (parsed by clap into `Vec<String>`)
+- Default: two Google public STUN servers
 
 ---
 
@@ -323,29 +260,31 @@ POST /comms/chat-rooms/{room}/video-call/join
 **Authorization:** User must be participant in chat room
 
 **Request Body:**
-```typescript
+```json
 {
-  displayName: string,      // Required
-  audioEnabled: boolean,    // Default: true
-  videoEnabled: boolean     // Default: true
+  "displayName": "string",
+  "audioEnabled": true,
+  "videoEnabled": true
 }
 ```
 
 **Response:** 200 OK
-```typescript
+```json
 {
-  roomUrl: string,          // WebSocket signaling URL
-  token: string,            // "USE_SESSION_TOKEN" sentinel
-  callStatus: string,       // "starting" | "active"
-  participants: Array<{
-    user: string,
-    userType: "patient" | "provider",
-    displayName: string,
-    joinedAt?: string,
-    leftAt?: string,
-    audioEnabled: boolean,
-    videoEnabled: boolean
-  }>
+  "roomUrl": "ws://localhost:7213/ws/comms/chat-rooms/{roomId}",
+  "token": "USE_SESSION_TOKEN",
+  "callStatus": "starting | active",
+  "participants": [
+    {
+      "user": "string",
+      "userType": "patient | provider",
+      "displayName": "string",
+      "joinedAt": "string",
+      "leftAt": null,
+      "audioEnabled": true,
+      "videoEnabled": true
+    }
+  ]
 }
 ```
 
@@ -355,21 +294,6 @@ POST /comms/chat-rooms/{room}/video-call/join
 - Subsequent participants join active call
 - Rejects if user already in call (409 Conflict)
 - Creates system message: "{displayName} joined the video call"
-
-**Room URL Format:**
-```
-ws://localhost:7213/comms/chat-rooms/{roomId}/video-call/signal
-```
-or
-```
-wss://api.example.com/comms/chat-rooms/{roomId}/video-call/signal
-```
-
-**Token Usage:**
-Clients should use their session token when connecting to WebSocket:
-```
-Authorization: Bearer {session_token}
-```
 
 ---
 
@@ -383,18 +307,18 @@ POST /comms/chat-rooms/{room}/video-call/end
 **Authorization:** User must be room admin
 
 **Response:** 200 OK
-```typescript
+```json
 {
-  message: string,
-  callDuration?: number,    // Minutes
-  systemMessage?: ChatMessage
+  "message": "string",
+  "callDuration": 12,
+  "systemMessage": {}
 }
 ```
 
 **Behavior:**
-- Calculates duration from startedAt to endedAt
+- Calculates duration from `startedAt` to `endedAt`
 - Updates video call status to "ended"
-- Clears room.activeVideoCallMessage reference
+- Clears `room.activeVideoCallMessage` reference
 - Creates system message: "Video call ended by {name} ({duration} minutes)"
 - Only room admins can end calls
 
@@ -410,20 +334,20 @@ POST /comms/chat-rooms/{room}/video-call/leave
 **Authorization:** User must be participant in call
 
 **Response:** 200 OK
-```typescript
+```json
 {
-  message: string,
-  callStillActive: boolean,
-  remainingParticipants: number
+  "message": "string",
+  "callStillActive": true,
+  "remainingParticipants": 1
 }
 ```
 
 **Behavior:**
-- Marks participant.leftAt timestamp
+- Marks `participant.leftAt` timestamp
 - Creates system message: "{displayName} left the video call"
 - If no participants remain:
   - Auto-ends call (status: "ended")
-  - Clears room.activeVideoCallMessage
+  - Clears `room.activeVideoCallMessage`
   - Creates system message: "Video call ended (no participants remaining)"
 
 ---
@@ -438,28 +362,17 @@ PATCH /comms/chat-rooms/{room}/video-call/participant
 **Authorization:** User must be participant in call
 
 **Request Body:**
-```typescript
+```json
 {
-  audioEnabled?: boolean,
-  videoEnabled?: boolean
+  "audioEnabled": true,
+  "videoEnabled": false
 }
 ```
 
-**Response:** 200 OK
-```typescript
-{
-  user: string,
-  userType: "patient" | "provider",
-  displayName: string,
-  joinedAt: string,
-  leftAt?: string,
-  audioEnabled: boolean,
-  videoEnabled: boolean
-}
-```
+**Response:** 200 OK — updated participant object
 
 **Behavior:**
-- Updates participant's audio/video status in database
+- Updates participant's audio/video status in database (SeaORM update)
 - Does NOT send WebSocket notification (client manages local state)
 
 ---
@@ -507,23 +420,24 @@ CREATE TABLE chat_message (
 
 ### Video Call Data Structure (JSONB)
 
-```typescript
-interface VideoCallData {
-  status: 'starting' | 'active' | 'ended' | 'cancelled',
-  roomUrl?: string,
-  token?: string,
-  startedAt?: string,      // ISO 8601
-  endedAt?: string,        // ISO 8601
-  durationMinutes?: number,
-  participants: Array<{
-    user: string,
-    userType: 'patient' | 'provider',
-    displayName: string,
-    joinedAt?: string,
-    leftAt?: string,
-    audioEnabled: boolean,
-    videoEnabled: boolean
-  }>
+```json
+{
+  "status": "starting | active | ended | cancelled",
+  "roomUrl": "string",
+  "startedAt": "ISO 8601",
+  "endedAt": "ISO 8601",
+  "durationMinutes": 12,
+  "participants": [
+    {
+      "user": "string",
+      "userType": "patient | provider",
+      "displayName": "string",
+      "joinedAt": "ISO 8601",
+      "leftAt": null,
+      "audioEnabled": true,
+      "videoEnabled": true
+    }
+  ]
 }
 ```
 
@@ -540,27 +454,26 @@ interface VideoCallData {
    - Response includes WebSocket URL and participant list
 
 2. **Provider connects to WebSocket:**
-   - Frontend: Connect to `ws://.../comms/chat-rooms/{room}`
-   - Backend validates participant, adds to channel
+   - Frontend: Connect to `ws://.../ws/comms/chat-rooms/{room}`
+   - Axum upgrade handler validates participant, subscribes to channel
    - Server sends `connected` event
 
 3. **Provider requests media:**
    - Frontend: `navigator.mediaDevices.getUserMedia()`
-   - Creates `RTCPeerConnection` with ICE servers from `/comms/ice-servers`
+   - Creates `RTCPeerConnection` with ICE servers from `GET /comms/ice-servers`
 
 4. **Patient joins call:**
    - Frontend: `POST /comms/chat-rooms/{room}/video-call/join`
    - Backend adds participant to existing call
    - Backend updates status: "starting" → "active"
-   - Response includes same WebSocket URL
 
 5. **Patient connects to WebSocket:**
    - Frontend: Connect to same WebSocket channel
-   - Backend validates participant, adds to channel
+   - Backend validates participant, subscribes to channel
 
 6. **WebRTC negotiation:**
    - Provider creates SDP offer → sends via `video.offer` message
-   - Server relays to patient
+   - Server relays to patient via `WebSocketService::publish_to_channel`
    - Patient creates SDP answer → sends via `video.answer` message
    - Server relays to provider
    - Both exchange ICE candidates via `video.ice-candidate` messages
@@ -583,7 +496,7 @@ interface VideoCallData {
 
 **Chat Messages:**
 - Send via WebSocket: `{type: 'chat.message', data: {text}}`
-- Server persists to database
+- Server persists to database via `ChatMessageRepository`
 - Server broadcasts to all channel participants
 
 ### Ending Call
@@ -609,51 +522,35 @@ interface VideoCallData {
 
 **WEBRTC_ICE_SERVERS**
 
-JSON array of ICE server configurations:
+Comma-separated list of STUN/TURN server URLs (parsed by clap):
 
 ```bash
-WEBRTC_ICE_SERVERS='[
-  {"urls": "stun:stun.l.google.com:19302"},
-  {"urls": "stun:stun1.l.google.com:19302"},
-  {
-    "urls": "turn:turn.example.com:3478",
-    "username": "user",
-    "credential": "pass"
-  }
-]'
+WEBRTC_ICE_SERVERS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302
 ```
 
-**Default value** (if not set):
-```javascript
-[
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-]
+To include TURN servers, configure via the env variable:
+
+```bash
+WEBRTC_ICE_SERVERS=stun:stun.l.google.com:19302,turn:turn.example.com:3478
+```
+
+**Default** (if not set):
+```
+stun:stun.l.google.com:19302
+stun:stun1.l.google.com:19302
 ```
 
 ### Code Reference
 
-Configuration defined in `src/core/config.ts:126-132`:
-```typescript
-webrtc: {
-  iceServers: Array<{
-    urls: string | string[];
-    username?: string;
-    credential?: string;
-  }>;
-}
-```
-
-Parsed in `src/core/config.ts:284-291`:
-```typescript
-webrtc: {
-  iceServers: process.env['WEBRTC_ICE_SERVERS']
-    ? JSON.parse(process.env['WEBRTC_ICE_SERVERS'])
-    : [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-}
+Configuration in `src/config.rs`:
+```rust
+#[arg(
+    long,
+    env = "WEBRTC_ICE_SERVERS",
+    default_value = "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302",
+    value_delimiter = ','
+)]
+pub webrtc_ice_servers: Vec<String>,
 ```
 
 ---
@@ -661,17 +558,15 @@ webrtc: {
 ## Implementation Files
 
 ### Backend
-- **WebSocket Handler:** `src/handlers/comms/ws.chat-room.ts`
-- **REST Handlers:**
-  - `src/handlers/comms/getIceServers.ts`
-  - `src/handlers/comms/joinVideoCall.ts`
-  - `src/handlers/comms/endVideoCall.ts`
-  - `src/handlers/comms/leaveVideoCall.ts`
-  - `src/handlers/comms/updateVideoCallParticipant.ts`
-- **Repositories:**
-  - `src/handlers/comms/repos/chatRoom.repo.ts`
-  - `src/handlers/comms/repos/chatMessage.repo.ts`
-- **Schema:** `src/handlers/comms/repos/comms.schema.ts`
+- **WebSocket Handler:** `src/handlers/comms/mod.rs`
+- **REST Handlers** (within `src/handlers/comms/mod.rs`):
+  - `get_ice_servers`
+  - `join_video_call`
+  - `end_video_call`
+  - `leave_video_call`
+  - `update_video_call_participant`
+- **Repositories:** `src/handlers/comms/repo.rs`
+- **WebSocket Service:** `src/service/ws.rs`
 
 ### Frontend (apps/provider)
 - **WebRTC Client:** `src/lib/webrtc/peer-connection.ts`
@@ -686,11 +581,11 @@ webrtc: {
 ### Authentication
 
 **Session Token:**
-- Clients extract session token from cookies (Better-Auth)
+- Clients extract session token from cookies (Better-Auth compatible `set-auth-token` header)
 - Token sent via `Authorization: Bearer {token}` header
-- WebSocket validates token via auth middleware
-- Frontend token extraction example:
-  ```typescript
+- Axum's `AuthUser` extractor validates the token before upgrading the WebSocket
+- Frontend token extraction:
+  ```javascript
   const sessionToken = document.cookie
     .split('; ')
     .find(row => row.startsWith('better-auth.session_token='))
@@ -699,9 +594,9 @@ webrtc: {
 
 **Connection Flow:**
 1. Client calls REST API to join video call
-2. API returns WebSocket URL: `ws://.../comms/chat-rooms/{room}`
-3. Client connects to WebSocket with `Authorization` header
-4. Server validates participant and tracks connection
+2. API returns WebSocket URL
+3. Client connects with `Authorization: Bearer {session_token}`
+4. Server validates participant and subscribes to broadcast channel
 
 ### WebSocket Client Behavior
 
@@ -720,15 +615,13 @@ webrtc: {
 ### WebRTC Client Implementation
 
 **RTCPeerConnection Setup:**
-```typescript
-const config = {
-  iceServers: await fetch('/comms/ice-servers').then(r => r.json())
-}
-const pc = new RTCPeerConnection(config.iceServers)
+```javascript
+const { iceServers } = await fetch('/comms/ice-servers').then(r => r.json())
+const pc = new RTCPeerConnection({ iceServers })
 ```
 
 **Media Stream:**
-```typescript
+```javascript
 const stream = await navigator.mediaDevices.getUserMedia({
   audio: true,
   video: { width: 1280, height: 720 }
@@ -742,7 +635,7 @@ stream.getTracks().forEach(track => pc.addTrack(track, stream))
 - Both exchange ICE candidates via `video.ice-candidate` messages
 
 **Screen Sharing:**
-```typescript
+```javascript
 const displayStream = await navigator.mediaDevices.getDisplayMedia({
   video: { cursor: 'always' },
   audio: false
@@ -775,14 +668,13 @@ await sender.replaceTrack(videoTrack)
 
 **STUN Servers:**
 - Required for NAT traversal
-- Discovers public IP address
 - Default: Google public STUN servers
 - Works on most networks
 
 **TURN Servers:**
 - NOT configured by default
 - Required for very restrictive firewalls/networks
-- Can be added via `WEBRTC_ICE_SERVERS` environment variable
+- Add via `WEBRTC_ICE_SERVERS` environment variable
 
 **Ports:**
 - WebSocket: 7213 (development) or 443 (production wss://)
@@ -799,25 +691,24 @@ await sender.replaceTrack(videoTrack)
 - No third-party servers access media streams
 
 **Authentication:**
-- All WebSocket connections require session token
-- REST endpoints require authentication via Better-Auth middleware
+- All WebSocket connections validated by `AuthUser` Axum extractor before upgrade
+- REST endpoints require authentication via `AuthUser`
 
 **Authorization:**
-- WebSocket: Verify user is participant before allowing connection
+- WebSocket: Verify user is participant before subscribing to channel
 - Join call: Verify user is participant in chat room
 - End call: Only room admins can end calls
 - Leave call: Only current participants can leave
 - Update participant: Only current participants can update their status
 
 **Input Validation:**
-- Display name required (trimmed)
+- Display name required (trimmed, validated with `garde`)
 - Chat messages limited to 5000 characters
-- Video call data validated via Zod schemas
-- WebSocket messages must be valid JSON
+- WebSocket messages must be valid JSON (parse errors return an `error` event)
 
 **Data Isolation:**
-- WebSocket channels namespaced: `chat-rooms/{roomId}`
-- Messages only relayed to participants in same channel
+- Broadcast channels namespaced: `chat-rooms/{roomId}`
+- Messages only relayed to subscribers of the same channel
 - Database queries filtered by participant authorization
 
 **Compliance:**

@@ -542,12 +542,11 @@ cargo fmt
 Migrations live in `src/generated/migrations/` and are applied at startup via SeaORM's migrator:
 
 ```bash
-# Generate a new migration (from the TypeScript service)
-# The Rust service applies migrations from the generated/ directory automatically on startup
-
-# To run migrations manually via Sea-ORM CLI:
+# Migrations live in src/generated/migrations/ and are applied automatically on startup.
+# To manage migrations manually via the Sea-ORM CLI:
 sea-orm-cli migrate up
 sea-orm-cli migrate down
+sea-orm-cli migrate status
 ```
 
 ---
