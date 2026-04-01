@@ -1,5 +1,7 @@
 # API Rewrite: Bun/TypeScript → Rust
 
+> **Historical document**: This was the rewrite specification used when porting from TypeScript/Bun to Rust. The TypeScript service has been removed. This document is kept for architectural reference.
+
 Port `services/api` to native Rust as `services/api-rs`. Reference architecture: `~/Projects/mycure/mono.rs/services/hapihub-rs`.
 
 ## Why Rust

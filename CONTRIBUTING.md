@@ -86,8 +86,7 @@ monobase/
 │   ├── ui/                   # Shared UI components
 │   └── sdk/                  # Type-safe API client
 ├── services/                  # Backend services
-│   ├── api/                  # API service — TypeScript (Hono + Bun)
-│   └── api-rs/               # API service — Rust (Axum + SeaORM)
+│   └── api/                  # API service (Axum + SeaORM)
 └── specs/                     # API specifications
     └── api/                  # TypeSpec definitions
 ```
@@ -100,13 +99,7 @@ monobase/
 - `src/lib/` - Utility functions and API clients
 - `src/hooks/` - Custom React hooks
 
-**API Service — TypeScript** (`services/api/`):
-- `src/handlers/` - Route handlers organized by module
-- `src/db/` - Drizzle schema and database logic
-- `src/middleware/` - Express-style middleware
-- `src/utils/` - Shared utilities
-
-**API Service — Rust** (`services/api-rs/`):
+**API Service** (`services/api/`):
 - `src/handlers/` - Axum route handlers with embedded auth + validation
 - `src/handlers/{module}/repo.rs` - SQL queries via SeaORM
 - `src/service/` - External integrations (Stripe, S3, email, notifications)
@@ -313,23 +306,9 @@ vim src/handlers/patient/createPatient.ts
 bun test
 ```
 
-### What `bun run generate` Does (TypeScript)
+### API Code Generation
 
-The generation script (`scripts/generate.ts`):
-
-1. ✅ Generates Better-Auth schema
-2. ✅ Runs database migrations
-3. ✅ Loads TypeSpec OpenAPI from `@monobase/api-spec`
-4. ✅ Generates Better-Auth OpenAPI spec
-5. ✅ Creates TypeScript type re-exports
-6. ✅ Generates Zod validators for all schemas
-7. ✅ Generates Hono routes with validation
-8. ✅ Creates handler registry
-9. ✅ Creates handler stubs (only for new endpoints)
-
-### What `npx tsx generator-rs.ts` Does (Rust)
-
-The Rust code generator (`services/api-rs/generator-rs.ts`):
+The code generator (`services/api/generator-rs.ts`):
 
 1. ✅ Reads OpenAPI spec from `specs/api/dist/openapi/openapi.json`
 2. ✅ Generates `src/generated/enums.rs` — Rust enums with serde derives
@@ -337,7 +316,7 @@ The Rust code generator (`services/api-rs/generator-rs.ts`):
 4. ✅ Generates `src/generated/routes.rs` — Route documentation and metadata
 5. ✅ Updates `src/generated/mod.rs` — Module declarations
 
-**⚠️ DO NOT EDIT** files in `services/api-rs/src/generated/` — they are overwritten by the generator.
+**⚠️ DO NOT EDIT** files in `services/api/src/generated/` — they are overwritten by the generator.
 
 ### Troubleshooting
 
@@ -930,24 +909,10 @@ const language = 'EN'  // ❌ uppercase language
 
 Each business module follows a consistent structure for maintainability:
 
-### Backend Module Structure — TypeScript
+### Backend Module Structure
 
 ```
 services/api/src/handlers/person/
-├── createPerson.ts         # Handler: Create person
-├── getPerson.ts            # Handler: Get person by ID
-├── updatePerson.ts         # Handler: Update person
-├── deletePerson.ts         # Handler: Delete person
-├── repos/
-│   └── person.repo.ts      # Database repository
-└── utils/
-    └── validation.ts       # Person-specific validators
-```
-
-### Backend Module Structure — Rust
-
-```
-services/api-rs/src/handlers/person/
 ├── mod.rs                  # All handlers (create, get, list, update) + request/response types
 └── repo.rs                 # SQL queries via SeaORM (JsonValue + raw SQL)
 ```
@@ -1379,43 +1344,10 @@ export async function signInAsUser(page: Page, email: string, password: string) 
 
 ## Testing Requirements
 
-### Unit Tests — TypeScript API
+### Unit Tests (API Service)
 
 ```bash
 cd services/api
-bun test
-```
-
-Write tests for:
-- Service layer business logic
-- Validation schemas
-- Utility functions
-- Middleware
-
-**Example Test**:
-```typescript
-// services/api/src/handlers/client/__tests__/service.test.ts
-import { describe, test, expect } from 'bun:test';
-import { ClientService } from '../service';
-
-describe('ClientService', () => {
-  test('creates client with valid data', async () => {
-    const service = new ClientService();
-    const client = await service.createClient({
-      person_id: '123e4567-e89b-12d3-a456-426614174000',
-      service_history: 'New client',
-    });
-    
-    expect(client.id).toBeDefined();
-    expect(client.person_id).toBe('123e4567-e89b-12d3-a456-426614174000');
-  });
-});
-```
-
-### Unit Tests — Rust API
-
-```bash
-cd services/api-rs
 cargo test
 ```
 
@@ -1426,7 +1358,7 @@ Write tests for:
 
 **Example Test** (already in codebase):
 ```rust
-// services/api-rs/src/auth/password.rs
+// services/api/src/auth/password.rs
 #[cfg(test)]
 mod tests {
     use super::*;

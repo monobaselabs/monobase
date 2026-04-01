@@ -1,5 +1,5 @@
 /**
- * generator-rs.ts — OpenAPI to Rust Code Generator for api-rs
+ * generator-rs.ts — OpenAPI to Rust Code Generator
  *
  * Reads the OpenAPI spec and generates:
  * - src/generated/types.rs   — Rust structs for all request/response schemas
@@ -24,8 +24,6 @@ const __dirname = path.dirname(__filename);
 const SPEC_CANDIDATES = [
   // TypeSpec-built spec (run `cd specs/api && bun run build` first)
   path.resolve(__dirname, '../../specs/api/dist/openapi/openapi.json'),
-  // Better-Auth generated spec (always present after `bun run generate`)
-  path.resolve(__dirname, '../api/src/generated/better-auth/openapi.json'),
 ];
 
 function loadSpec(): { spec: any; specPath: string } {

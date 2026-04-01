@@ -37,7 +37,7 @@ Providers must complete Stripe Connect onboarding before receiving payments:
 ## Invoice State Machine
 
 ### Status Field
-```typescript
+```
 status: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible'
 ```
 
@@ -48,7 +48,7 @@ status: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible'
 - **uncollectible**: Marked as uncollectible
 
 ### Payment Status Field
-```typescript
+```
 paymentStatus: 'unpaid' | 'processing' | 'requires_capture' | 'succeeded' | 'failed' | 'canceled'
 ```
 
@@ -61,8 +61,8 @@ paymentStatus: 'unpaid' | 'processing' | 'requires_capture' | 'succeeded' | 'fai
 
 ### State Transitions
 
-```typescript
-// Valid transitions
+```
+# Valid transitions
 draft → open (finalize invoice)
 open → paid (capture payment)
 open → void (cancel before capture)
@@ -71,11 +71,121 @@ open → uncollectible (mark as uncollectible)
 
 ---
 
+## Stripe Integration
+
+### BillingService
+
+Location: `src/service/billing.rs`
+
+The `BillingService` wraps the `async-stripe` crate (0.39). The inner `stripe::Client` is initialised lazily via `OnceLock` so service construction is infallible:
+
+```rust
+pub struct BillingService {
+    secret_key: Option<String>,
+    webhook_secret: Option<String>,
+    stripe_url: Option<String>,   // Optional override for stripe-mock in tests
+    client: OnceLock<Client>,
+}
+
+impl BillingService {
+    pub fn new(config: &Config) -> Self { /* ... */ }
+    pub fn is_configured(&self) -> bool { self.secret_key.is_some() }
+}
+```
+
+### Webhook Signature Verification
+
+```rust
+pub fn verify_webhook(
+    &self,
+    payload: &[u8],
+    signature: &str,
+) -> Result<stripe::Event, BillingError> {
+    let secret = self.webhook_secret.as_deref()
+        .ok_or(BillingError::WebhookSecretMissing)?;
+
+    let payload_str = std::str::from_utf8(payload)
+        .map_err(|_| BillingError::WebhookInvalid(stripe::WebhookError::BadSignature))?;
+
+    let event = Webhook::construct_event(payload_str, signature, secret)?;
+    Ok(event)
+}
+```
+
+### Payment Intents
+
+```rust
+pub async fn create_payment_intent(
+    &self,
+    amount: i64,
+    currency: &str,
+    metadata: HashMap<String, String>,
+    transfer_to: Option<&str>,
+) -> Result<PaymentIntent, BillingError> { /* ... */ }
+
+pub async fn capture_payment_intent(
+    &self,
+    payment_intent_id: &str,
+) -> Result<PaymentIntent, BillingError> { /* ... */ }
+
+pub async fn cancel_payment_intent(
+    &self,
+    payment_intent_id: &str,
+) -> Result<PaymentIntent, BillingError> { /* ... */ }
+```
+
+### Refunds
+
+```rust
+// Pass None for amount to refund the full remaining balance
+pub async fn create_refund(
+    &self,
+    payment_intent_id: &str,
+    amount: Option<i64>,
+) -> Result<Refund, BillingError> { /* ... */ }
+```
+
+### Stripe Connect
+
+```rust
+pub async fn create_connect_account(&self, email: &str) -> Result<Account, BillingError> { /* ... */ }
+
+pub async fn generate_onboarding_link(
+    &self,
+    account_id: &str,
+    return_url: &str,
+) -> Result<String, BillingError> { /* ... */ }
+```
+
+### Error Type
+
+```rust
+#[derive(Debug, Error)]
+pub enum BillingError {
+    #[error("Stripe is not configured (missing STRIPE_SECRET_KEY)")]
+    NotConfigured,
+
+    #[error("Webhook secret is not configured (missing STRIPE_WEBHOOK_SECRET)")]
+    WebhookSecretMissing,
+
+    #[error("Webhook signature verification failed: {0}")]
+    WebhookInvalid(#[from] stripe::WebhookError),
+
+    #[error("Stripe API error: {0}")]
+    Stripe(#[from] stripe::StripeError),
+
+    #[error("Invalid Stripe ID '{0}'")]
+    InvalidId(String),
+}
+```
+
+---
+
 ## Stripe Webhook Integration
 
-### Custom Webhook Handler
+### Webhook Handler
 
-Location: `src/handlers/billing/handleStripeWebhook.ts`
+Location: `src/handlers/billing/mod.rs`
 
 **Purpose**: Synchronize Stripe events with local database and trigger notifications.
 
@@ -100,45 +210,31 @@ Location: `src/handlers/billing/handleStripeWebhook.ts`
 - **transfer.created** → Log successful transfer to merchant
 - **transfer.failed** → Log failed transfer (requires manual review)
 
-### Custom Logic Highlights
+### Webhook Error Handling
 
-**1. Invoice Lookup by Payment Intent**
-```typescript
-// Webhooks reference payment intent IDs
-// Custom JSONB search to find invoice
-const allInvoices = await invoiceRepo.db.select().from(invoices);
-const invoice = allInvoices.find((inv: any) => {
-  const metadata = inv.metadata as any;
-  return metadata?.stripePaymentIntentId === paymentIntentId;
-});
-```
+The handler always returns 200 to prevent Stripe retries on business logic errors:
 
-**2. Notification Integration**
-```typescript
-// Dual notifications on charge success
-await notificationService.createNotification({
-  recipientId: invoice.customer,
-  type: 'payment_captured',
-  channels: ['in-app', 'email']
-});
+```rust
+pub async fn handle_stripe_webhook(
+    State(ctx): State<AppContext>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let signature = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| ApiError::BadRequest("Missing Stripe-Signature header".into()))?;
 
-await notificationService.createNotification({
-  recipientId: invoice.merchant,
-  type: 'payment_received',
-  channels: ['in-app', 'email']
-});
-```
+    let event = ctx.billing.verify_webhook(&body, signature)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-**3. Metadata Tracking**
-```typescript
-// Store Stripe IDs in JSONB metadata for correlation
-const updatedMetadata = {
-  stripePaymentIntentId: paymentIntent.id,
-  stripeChargeId: charge.id,
-  stripeTransferId: transfer.id,
-  refundAmount: refundAmountDecimal,
-  refundedAt: new Date().toISOString()
-};
+    // Dispatch on event.type_ — return 200 even for business logic errors
+    match event.type_ {
+        // ...
+    }
+
+    Ok(Json(serde_json::json!({ "received": true })))
+}
 ```
 
 ---
@@ -147,9 +243,9 @@ const updatedMetadata = {
 
 ### Phase 1: Authorization (Hold)
 
-**Endpoint**: `POST /billing/invoices` → `finalizeInvoice`
+**Endpoint**: `POST /billing/invoices` → finalize handler
 
-```typescript
+```
 // Customer pays → Stripe authorizes payment
 // Funds are HELD, not charged
 // Invoice status: open
@@ -165,7 +261,7 @@ const updatedMetadata = {
 
 **Endpoint**: `POST /billing/invoices/:id/capture`
 
-```typescript
+```
 // Provider confirms service → Capture payment
 // Funds transferred to provider account
 // Invoice status: paid
@@ -173,7 +269,7 @@ const updatedMetadata = {
 ```
 
 **Alternative**: Cancel Instead
-```typescript
+```
 // Service canceled → Release authorization
 // POST /billing/invoices/:id/void
 // Invoice status: void
@@ -188,7 +284,7 @@ const updatedMetadata = {
 
 **Endpoint**: `POST /billing/merchant-accounts`
 
-Creates Stripe Connect account for provider.
+Creates Stripe Express connected account for provider.
 
 ### 2. Generate Onboarding Link
 
@@ -196,7 +292,7 @@ Creates Stripe Connect account for provider.
 
 Returns Stripe-hosted onboarding URL.
 
-```typescript
+```json
 {
   "onboardingUrl": "https://connect.stripe.com/setup/s/...",
   "expiresAt": "2024-01-15T10:00:00Z"
@@ -209,14 +305,14 @@ Returns Stripe-hosted onboarding URL.
 
 **Via API**: `GET /billing/merchant-accounts/:id`
 
-```typescript
+```json
 {
-  "active": boolean,
+  "active": true,
   "metadata": {
-    "onboardingComplete": boolean,
-    "accountChargesEnabled": boolean,
-    "accountPayoutsEnabled": boolean,
-    "requirementsCurrentlyDue": string[]
+    "onboardingComplete": true,
+    "accountChargesEnabled": true,
+    "accountPayoutsEnabled": true,
+    "requirementsCurrentlyDue": []
   }
 }
 ```
@@ -233,40 +329,19 @@ Returns Stripe Express Dashboard login link.
 
 ### Business Logic Errors
 
-```typescript
+```rust
 // Invoice must be in correct state
-if (invoice.status !== 'open') {
-  throw new BusinessLogicError(
-    'Cannot capture payment: invoice is not open',
-    'INVALID_INVOICE_STATUS'
-  );
+if invoice.status != "open" {
+    return Err(ApiError::BadRequest(
+        "Cannot capture payment: invoice is not open".into()
+    ));
 }
 
 // Merchant must be onboarded
-if (!merchantAccount.active) {
-  throw new BusinessLogicError(
-    'Merchant account not active',
-    'MERCHANT_ACCOUNT_INACTIVE'
-  );
-}
-```
-
-### Webhook Error Handling
-
-```typescript
-// Always return 200 to prevent retries
-try {
-  await processWebhookEvent(event);
-  return ctx.json({ received: true }, 200);
-} catch (error) {
-  logger.error({ error, eventType: event.type }, 'Webhook processing failed');
-  
-  // Still return 200 for business logic errors
-  if (error instanceof BusinessLogicError) {
-    return ctx.json({ received: true, error: error.message }, 200);
-  }
-  
-  throw error;
+if !merchant_account.active {
+    return Err(ApiError::BadRequest(
+        "Merchant account not active".into()
+    ));
 }
 ```
 
@@ -274,20 +349,34 @@ try {
 
 ## Implementation Files
 
-**Handlers**:
-- `createInvoice.ts` - Create draft invoice
-- `finalizeInvoice.ts` - Finalize and authorize payment
-- `captureInvoicePayment.ts` - Capture authorized payment
-- `payInvoice.ts` - Direct payment (skip authorization)
-- `refundInvoicePayment.ts` - Refund captured payment
-- `voidInvoice.ts` - Cancel invoice and release authorization
-- `handleStripeWebhook.ts` - Webhook event handler
-- `onboardMerchantAccount.ts` - Generate onboarding link
-- `getMerchantDashboard.ts` - Generate dashboard link
+**Service**:
+- `src/service/billing.rs` — `BillingService` wrapping `async-stripe`
 
-**Repositories**:
-- `repos/billing.repo.ts` - Database operations
-- `repos/billing.schema.ts` - Drizzle schema and types
+**Handlers** (`src/handlers/billing/mod.rs`):
+- `create_invoice` — Create draft invoice
+- `finalize_invoice` — Finalize and authorize payment
+- `capture_invoice_payment` — Capture authorized payment
+- `pay_invoice` — Direct payment (skip authorization)
+- `refund_invoice_payment` — Refund captured payment
+- `void_invoice` — Cancel invoice and release authorization
+- `handle_stripe_webhook` — Webhook event handler
+- `onboard_merchant_account` — Generate onboarding link
+- `get_merchant_dashboard` — Generate dashboard link
+
+**Repository**:
+- `src/handlers/billing/repo.rs` — SeaORM database operations
+
+---
+
+## Configuration
+
+Environment variables (parsed into `Config` via clap):
+
+```bash
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_URL=                    # Optional: override for stripe-mock in tests
+```
 
 ---
 
@@ -306,6 +395,19 @@ stripe trigger charge.succeeded
 stripe trigger account.updated
 ```
 
+### Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run billing-specific tests
+cargo test billing
+
+# Run with output
+cargo test -- --nocapture
+```
+
 ### Test Cards
 
 ```
@@ -320,10 +422,10 @@ See [Stripe test cards](https://stripe.com/docs/testing) for complete list.
 
 ## Security Considerations
 
-1. **Webhook Signature Verification**: Always verify Stripe signatures
+1. **Webhook Signature Verification**: Always verify Stripe signatures via `BillingService::verify_webhook`
 2. **Idempotency**: Webhooks may be delivered multiple times
 3. **Metadata Privacy**: Don't store PHI in Stripe metadata
-4. **Audit Logging**: All payment operations logged with Pino
+4. **Audit Logging**: All payment operations logged with `tracing`
 5. **Authorization Timing**: Authorizations expire after 7 days
 
 ---
@@ -332,43 +434,31 @@ See [Stripe test cards](https://stripe.com/docs/testing) for complete list.
 
 ### Creating Invoice with Authorization
 
-```typescript
-// 1. Create draft invoice
-const invoice = await invoiceRepo.createOne({
-  customer: patientId,
-  merchant: providerId,
-  items: invoiceItems,
-  status: 'draft'
-});
-
-// 2. Finalize invoice (authorizes payment)
-await finalizeInvoice({ invoiceId: invoice.id });
-
-// Result: Payment authorized, funds held
-// Invoice status: open
-// Payment status: requires_capture
+```
+1. Create draft invoice (POST /billing/invoices)
+2. Finalize invoice — authorizes Stripe payment intent
+   Result: Payment authorized, funds held
+   Invoice status: open / Payment status: requires_capture
 ```
 
 ### Capturing Payment After Service
 
-```typescript
-// Provider confirms service completion
-await captureInvoicePayment({ invoiceId: invoice.id });
-
-// Result: Payment captured, funds transferred
-// Invoice status: paid
-// Payment status: succeeded
+```
+Provider confirms service completion
+POST /billing/invoices/:id/capture
+  → BillingService::capture_payment_intent(payment_intent_id)
+Result: Payment captured, funds transferred
+Invoice status: paid / Payment status: succeeded
 ```
 
 ### Canceling Before Capture
 
-```typescript
-// Service canceled before completion
-await voidInvoice({ invoiceId: invoice.id });
-
-// Result: Authorization released, no charge
-// Invoice status: void
-// Payment status: canceled
+```
+Service canceled before completion
+POST /billing/invoices/:id/void
+  → BillingService::cancel_payment_intent(payment_intent_id)
+Result: Authorization released, no charge
+Invoice status: void / Payment status: canceled
 ```
 
 ---

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run E2E tests against the Rust API server.
-# Expects: cargo run in services/api-rs (port 7213)
+# Expects: cargo run in services/api (port 7213)
 set -euo pipefail
 
 export API_URL="${API_URL:-http://localhost:7213}"

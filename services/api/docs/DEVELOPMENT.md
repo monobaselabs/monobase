@@ -9,177 +9,59 @@ This document outlines the API development standards and best practices for the 
 3. [Response Patterns](#response-patterns)
 4. [Request Body Standards](#request-body-standards)
 5. [Entity Reference Patterns](#entity-reference-patterns)
-6. [TypeSpec Best Practices](#typespec-best-practices)
-7. [Security Pattern Standards](#security-pattern-standards)
-8. [Error Handling Standards](#error-handling-standards)
-9. [Module Organization](#module-organization)
-10. [Examples and Templates](#examples-and-templates)
+6. [Security Pattern Standards](#security-pattern-standards)
+7. [Error Handling Standards](#error-handling-standards)
+8. [Module Organization](#module-organization)
+9. [Examples and Templates](#examples-and-templates)
 
 ## Overview
 
-The Monobase API follows an **API-first design approach** using TypeSpec for specification definition. All APIs are defined in TypeSpec files (`specs/api/src/modules/`) and generate both OpenAPI specifications and TypeScript types.
+The Monobase API (Rust) is a native backend built on **Axum** with **SeaORM** for database access and **utoipa** for OpenAPI generation. Handlers are organized as plain Rust async functions registered on an Axum router.
 
 ### Core Design Principles
 
 - **Consistency**: Uniform naming, structure, and behavior across all endpoints
-- **Type Safety**: Comprehensive TypeScript type generation from TypeSpec definitions
+- **Type Safety**: Rust's type system enforced at compile time; serde for JSON
 - **Healthcare Compliance**: HIPAA-compliant patterns with audit trails and consent management
-- **Developer Experience**: Clear documentation, predictable patterns, and comprehensive error responses
-- **API-First**: Define APIs before implementation using TypeSpec specifications
+- **Developer Experience**: Clear documentation, predictable patterns, and structured error responses
+- **Zero-Cost Abstractions**: No runtime overhead from the framework layer
+
+### Technology Stack
+
+| Layer | Crate |
+|-------|-------|
+| HTTP framework | `axum 0.8` |
+| ORM | `sea-orm 1.1` (Postgres + SQLite) |
+| OpenAPI | `utoipa 5.3` + `utoipa-axum` |
+| Validation | `garde 0.21` |
+| Auth | `bcrypt`, `hmac`, `sha2`, `base64` |
+| Billing | `async-stripe 0.39` |
+| Email | `lettre 0.11` (SMTP) + `reqwest` (Postmark/OneSignal) |
+| Logging | `tracing` + `tracing-subscriber` |
 
 ## Field Naming Conventions
 
 ### Primary Rules
 
-**✅ Use camelCase for all properties**
-```typescript
-// ✅ Correct
-{
-  "firstName": "John",
-  "lastName": "Doe",
-  "startTime": "09:00",
-  "endTime": "17:00"
-}
+**Use camelCase in JSON, snake_case in Rust**
 
-// ❌ Incorrect
-{
-  "first_name": "John",
-  "last_name": "Doe", 
-  "start_time": "09:00",
-  "end_time": "17:00"
+Serde handles the mapping via `#[serde(rename_all = "camelCase")]` on request/response structs:
+
+```rust
+// ✅ Correct — Rust struct with camelCase JSON output
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatientResponse {
+    pub id: Uuid,
+    pub first_name: String,
+    pub last_name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 ```
 
-**✅ Avoid entityId suffix pattern**
-```typescript
-// ✅ Correct - Use direct entity reference
-{
-  "person": "123e4567-e89b-12d3-a456-426614174000",
-  "provider": "456e7890-e89b-12d3-a456-426614174001"
-}
-
-// ❌ Incorrect - Don't use Id suffix
-{
-  "personId": "123e4567-e89b-12d3-a456-426614174000",
-  "providerId": "456e7890-e89b-12d3-a456-426614174001"
-}
-```
-
-### Expandable Entity References
-
-Support both UUID references and expanded objects:
-
-```typescript
-// TypeSpec Definition
-@doc("Patient profile with medical and administrative information")
-model Patient extends BaseEntity {
-  @doc("Reference to person record ID or expanded person object")
-  person: UUID | Person;
-  
-  @doc("Primary care provider information")
-  primaryProvider?: ProviderInfo;
-}
-```
-
-### Date and Time Fields
-
-```typescript
-// ✅ Correct naming patterns
-{
-  "createdAt": "2023-12-01T10:00:00Z",        // Timestamps use 'At' suffix
-  "updatedAt": "2023-12-01T15:30:00Z",
-  "startTime": "09:00",                        // Time values use 'Time'
-  "endTime": "17:00",
-  "invoiceDate": "2023-12-01",                // Dates use 'Date' suffix
-  "dueDate": "2023-12-15"
-}
-```
-
-### Boolean Fields
-
-```typescript
-// ✅ Use descriptive boolean names
-{
-  "isActive": true,
-  "hasNextPage": false,
-  "isRecurring": true,
-  "coverageActive": true
-}
-
-// ❌ Avoid ambiguous boolean names
-{
-  "active": true,     // Ambiguous
-  "recurring": true,  // Not clearly boolean
-  "coverage": true    // Unclear meaning
-}
-```
-
-## Response Patterns
-
-### List Endpoints - PaginatedResponse<T>
-
-**All list endpoints MUST use `PaginatedResponse<T>`** where T matches the individual get endpoint response:
-
-```typescript
-// TypeSpec Interface Definition
-@doc("List patients. Requires 'admin' or 'support' role.")
-@operationId("listPatients")
-@get
-listPatients(
-  @query q?: string,
-  @query expand?: string[],
-  ...PaginationParams
-): {
-  @statusCode statusCode: 200;
-  @body body: PaginatedResponse<Patient>;  // ✅ Use PaginatedResponse<T>
-} | AuthenticationError | AuthorizationError;
-```
-
-**Consistency Rule**: The `T` in `PaginatedResponse<T>` must be identical to the response type of the corresponding `get` endpoint.
-
-### Individual Endpoints - Direct Entity Types
-
-Individual resource endpoints return the entity directly:
-
-```typescript
-@doc("Get patient profile.")
-@operationId("getPatient")
-@get
-@route("/{patient}")
-getPatient(
-  @path patient: UUID,
-  @query expand?: string[]
-): {
-  @statusCode statusCode: 200;
-  @body body: Patient;  // ✅ Direct entity type
-} | NotFoundError | AuthorizationError;
-```
-
-### Response Structure Examples
-
-```typescript
-// List Response
-{
-  "data": [
-    {
-      "id": "123e4567-e89b-12d3-a456-426614174000",
-      "firstName": "John",
-      "lastName": "Doe"
-    }
-  ],
-  "pagination": {
-    "offset": 0,
-    "limit": 20,
-    "count": 1,
-    "totalCount": 1,
-    "totalPages": 1,
-    "currentPage": 1,
-    "hasNextPage": false,
-    "hasPreviousPage": false
-  }
-}
-
-// Individual Response  
+Wire format:
+```json
 {
   "id": "123e4567-e89b-12d3-a456-426614174000",
   "firstName": "John",
@@ -189,485 +71,484 @@ getPatient(
 }
 ```
 
+**Avoid `entity_id` suffix pattern**
+
+```rust
+// ✅ Correct — direct entity reference
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookingRequest {
+    pub person: Uuid,
+    pub provider: Uuid,
+}
+
+// ❌ Incorrect — don't use Id suffix in the JSON field name
+pub struct BookingRequest {
+    pub person_id: Uuid,
+    pub provider_id: Uuid,
+}
+```
+
+### Date and Time Fields
+
+```rust
+// ✅ Correct naming patterns
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoiceResponse {
+    pub created_at: DateTime<Utc>,   // Timestamps use 'At' suffix
+    pub updated_at: DateTime<Utc>,
+    pub start_time: NaiveTime,       // Time values use 'Time'
+    pub end_time: NaiveTime,
+    pub invoice_date: NaiveDate,     // Dates use 'Date' suffix
+    pub due_date: NaiveDate,
+}
+```
+
+### Boolean Fields
+
+```rust
+// ✅ Use descriptive boolean names
+#[derive(Serialize, Deserialize)]
+pub struct PaginationMeta {
+    pub is_active: bool,
+    pub has_next_page: bool,
+    pub is_recurring: bool,
+}
+```
+
+## Response Patterns
+
+### List Endpoints — `PaginatedResponse<T>`
+
+All list endpoints return a paginated envelope:
+
+```rust
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedResponse<T: Serialize> {
+    pub data: Vec<T>,
+    pub pagination: PaginationMeta,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginationMeta {
+    pub offset: i64,
+    pub limit: i64,
+    pub count: i64,
+    pub total_count: i64,
+    pub total_pages: i64,
+    pub current_page: i64,
+    pub has_next_page: bool,
+    pub has_previous_page: bool,
+}
+```
+
+### Individual Endpoints — Direct Entity Types
+
+Individual resource endpoints return the entity directly as JSON:
+
+```rust
+// Handler signature
+pub async fn get_patient(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(patient_id): Path<Uuid>,
+) -> Result<Json<PatientResponse>, ApiError> {
+    // ...
+}
+```
+
 ## Request Body Standards
 
-### Required vs Optional Request Bodies
+### Required vs Optional Fields
 
-**Required request body**: When fields inside are required
-```typescript
-@doc("Create new patient. Requires 'user' role.")
-@operationId("createPatient")
-@post
-createPatient(
-  @body patient: PatientCreateRequest  // ✅ Required - has required fields
-): CreatedResponse | ValidationError;
+Use `Option<T>` for optional fields in update requests:
 
-// Supporting model with required fields
-@doc("Patient creation request")
-model PatientCreateRequest {
-  @doc("Person demographic information")
-  person?: PersonCreateRequest;  // Optional field
-  
-  @doc("Primary care provider information") 
-  primaryProvider?: ProviderInfo; // Optional field
+```rust
+// Create request — required fields are non-Option
+#[derive(Debug, Deserialize, garde::Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePatientRequest {
+    #[garde(skip)]
+    pub person: Option<CreatePersonRequest>,
+    #[garde(skip)]
+    pub primary_provider: Option<ProviderInfo>,
+}
+
+// Update request — all fields optional
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePatientRequest {
+    pub primary_provider: Option<ProviderInfo>,
+    pub primary_pharmacy: Option<PharmacyInfo>,
 }
 ```
 
-**Optional request body**: When all fields are optional
-```typescript
-@doc("Update patient profile.")
-@operationId("updatePatient")  
-@patch
-updatePatient(
-  @path patient: UUID,
-  @body updates?: PatientUpdateRequest  // ✅ Optional - all fields optional
-): Patient | NotFoundError | ValidationError;
+### Action Endpoints — Reason Field
 
-// All fields optional in update requests
-@doc("Patient profile update request")
-model PatientUpdateRequest {
-  @doc("Primary care provider information")
-  primaryProvider?: ProviderInfo | null;
-  
-  @doc("Primary pharmacy information")
-  primaryPharmacy?: PharmacyInfo | null;
+Action endpoints include a `reason` field for audit trails:
+
+```rust
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentActionRequest {
+    #[garde(length(max = 500))]
+    pub reason: Option<String>,
 }
-```
-
-### Action Endpoints - Reason Field Requirement
-
-**Action endpoints require reason field for audit trails**:
-
-```typescript
-@doc("Appointment action request")
-model AppointmentActionRequest {
-  @doc("Action reason")  
-  @maxLength(500)
-  reason?: string;  // Required for audit compliance
-}
-
-// Usage in action endpoints
-@doc("Cancel appointment. Mutual cancellation rights.")
-@operationId("cancelAppointment")
-@post
-@route("/appointments/{appointment}/cancel")
-cancelAppointment(
-  @path appointment: UUID,
-  @body request: AppointmentActionRequest  // ✅ Includes reason for auditing
-): AppointmentResponse | NotFoundError;
 ```
 
 ## Entity Reference Patterns
 
-### BaseEntity Extension
+### Base Fields
 
-All domain entities should extend `BaseEntity` for consistent audit fields:
+All entities include standard audit fields via SeaORM column definitions:
 
-```typescript
-@doc("Healthcare provider profile")
-model Provider extends BaseEntity {  // ✅ Extends BaseEntity
-  @doc("Reference to person record")
-  person: UUID | Person;
-  
-  @doc("Provider type")
-  providerType: ProviderType;
-  
-  @doc("Years of experience")
-  yearsOfExperience?: int32;
-}
+```rust
+// Every entity model includes:
+pub id: Uuid,
+pub created_at: DateTime<Utc>,
+pub updated_at: DateTime<Utc>,
+pub created_by: Option<Uuid>,
+pub updated_by: Option<Uuid>,
 ```
 
-### Entity Reference Types
+### Expandable References
 
-Support both UUID and expanded object references:
+Use `serde_json::Value` or a custom enum for fields that may be returned as a UUID reference or a nested object:
 
-```typescript
-// ✅ Flexible reference pattern
-model Patient extends BaseEntity {
-  @doc("Reference to person record ID or expanded person object")
-  person: UUID | Person;  // Allows both reference and expansion
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PersonRef {
+    Id(Uuid),
+    Object(Box<PersonResponse>),
 }
 
-// Usage in API responses
-{
-  "id": "patient-uuid",
-  "person": "person-uuid"  // When not expanded
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatientResponse {
+    pub id: Uuid,
+    pub person: PersonRef,
 }
-
-// OR when expanded
-{
-  "id": "patient-uuid", 
-  "person": {              // When expanded
-    "id": "person-uuid",
-    "firstName": "John",
-    "lastName": "Doe"
-  }
-}
-```
-
-### Common Model Reuse
-
-Define reusable models outside namespaces:
-
-```typescript
-// ✅ Exported without namespace for reuse
-@doc("Provider information for patient reference")
-model ProviderInfo {
-  @doc("Provider name")
-  @minLength(1)
-  @maxLength(100)
-  name: string;
-  
-  @doc("Provider specialty")
-  @maxLength(100) 
-  specialty?: string;
-  
-  @doc("Provider contact phone")
-  phone?: PhoneNumber;
-}
-
-// Reused in multiple models
-model Patient extends BaseEntity {
-  primaryProvider?: ProviderInfo;  // ✅ Reused model
-}
-```
-
-## TypeSpec Best Practices
-
-### Model Organization
-
-**Export models outside namespaces** for maximum reusability:
-
-```typescript
-// ✅ Correct - Models defined outside namespace
-@doc("Patient profile with medical information") 
-model Patient extends BaseEntity {
-  person: UUID | Person;
-  primaryProvider?: ProviderInfo;
-}
-
-// ✅ Namespace only for interfaces/endpoints
-@route("/patients")
-@tag("Patient")
-namespace PatientModule {
-  interface PatientManagement {
-    // Operations here
-  }
-}
-```
-
-### Decorator Usage Patterns
-
-```typescript
-// ✅ Comprehensive decoration
-@doc("Create new patient. Requires 'user' role.")      // Clear description
-@operationId("createPatient")                          // Unique operation ID
-@post                                                  // HTTP method
-@useAuth(bearerAuth)                                   // Authentication
-@extension("x-security-required-roles", ["user"])     // Role requirements
-createPatient(
-  @body patient: PatientCreateRequest
-): CreatedResponse | ValidationError;
-```
-
-### Path Parameter Patterns
-
-```typescript
-// ✅ Support both UUID and special values
-@doc("Get patient profile. Use 'me' for current user's profile.")
-@operationId("getPatient")
-@get
-@route("/{patient}")
-getPatient(
-  @path @doc("Patient ID (UUID) or 'me' for current user's profile") 
-  patient: UUID | "me",  // ✅ Flexible path parameter
-  @query expand?: string[]
-): Patient | NotFoundError;
-```
-
-### Query Parameter Standards
-
-```typescript
-// ✅ Standard query patterns
-listPatients(
-  @query q?: string,              // Search query
-  @query expand?: string[],       // Entity expansion
-  @query status?: PatientStatus,  // Enum filtering
-  @query startDate?: plainDate,   // Date range filtering
-  @query endDate?: plainDate,
-  ...PaginationParams             // Standard pagination
-): PaginatedResponse<Patient>;
 ```
 
 ## Security Pattern Standards
 
 ### Authentication and Authorization
 
-**All protected endpoints must specify authentication and roles**:
+All protected handlers extract the authenticated user via an `AuthUser` extractor:
 
-```typescript
-// ✅ Complete security specification
-@useAuth(bearerAuth)                                           // Authentication method
-@extension("x-security-required-roles", ["admin", "support"])  // Role requirements
+```rust
+use crate::middleware::auth::AuthUser;
+
+pub async fn get_patient(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,          // Fails with 401 if token invalid
+    Path(patient_id): Path<Uuid>,
+) -> Result<Json<PatientResponse>, ApiError> {
+    // user.roles contains the authenticated user's roles
+    if !user.has_role("admin") && user.id != patient_id {
+        return Err(ApiError::forbidden("Insufficient permissions"));
+    }
+    // ...
+}
 ```
 
-### Role Syntax Patterns
+### Role Checking
 
-```typescript
-// Single role requirement
-@extension("x-security-required-roles", ["admin"])
+```rust
+// Single role
+user.has_role("admin")
 
-// Owner permission requirement  
-@extension("x-security-required-roles", ["patient:owner"])
+// Any of several roles
+user.has_any_role(&["admin", "support"])
 
-// Multiple role options (OR condition)
-@extension("x-security-required-roles", ["admin", "provider:owner"])
-
-// Complex permission (role AND permission)
-@extension("x-security-required-roles", ["patient:owner", "provider:owner", "admin"])
+// Owner permission
+user.id == resource.person_id
 ```
 
 ### Public Endpoints
 
-Public endpoints should be clearly marked:
+Public endpoints omit the `AuthUser` extractor:
 
-```typescript
-// ✅ Public endpoint - no authentication decorators
-@doc("Search providers. Public endpoint - no authentication required.")
-@operationId("searchProviders") 
-@get
-searchProviders(
-  @query specialty?: string,
-  ...PaginationQuery
-): ProviderSearchResponse;
+```rust
+// No AuthUser — fully public
+pub async fn search_providers(
+    State(ctx): State<AppContext>,
+    Query(params): Query<SearchProvidersParams>,
+) -> Result<Json<PaginatedResponse<ProviderResponse>>, ApiError> {
+    // ...
+}
 ```
 
 ## Error Handling Standards
 
-### Standard Error Response Pattern
+### `ApiError` Type
 
-All operations must include comprehensive error responses:
+All handlers return `Result<_, ApiError>`. The `ApiError` type serializes to a consistent JSON envelope:
 
-```typescript
-// ✅ Complete error response specification
-createPatient(
-  @body patient: PatientCreateRequest
-): {
-  @statusCode statusCode: 201;
-  @body body: Patient;
-} | {
-  @statusCode statusCode: 400;
-  @body body: ValidationError;
-} | {
-  @statusCode statusCode: 401;
-  @body body: AuthenticationError;  
-} | {
-  @statusCode statusCode: 403;
-  @body body: AuthorizationError;
-} | {
-  @statusCode statusCode: 409;
-  @body body: ConflictError;
-};
+```rust
+// src/error.rs
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
+    #[error("Database error: {0}")]
+    Database(#[from] sea_orm::DbErr),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
 ```
 
-### Shorthand Error Responses
+Wire format on error:
+```json
+{
+  "error": "Not found",
+  "message": "Patient 123 not found",
+  "statusCode": 404
+}
+```
 
-For common combinations, use imported error types:
+### Handler Error Pattern
 
-```typescript
-// ✅ Shorthand for common errors
-createProvider(
-  @body provider: ProviderCreateRequest
-): CreatedResponse | ValidationError | AuthenticationError | AuthorizationError | ConflictError;
+```rust
+pub async fn get_patient(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(patient_id): Path<Uuid>,
+) -> Result<Json<PatientResponse>, ApiError> {
+    let repo = PatientRepo::new(&ctx.db);
+
+    let patient = repo
+        .find_by_id(patient_id)
+        .await?                          // DbErr → ApiError::Database (via From)
+        .ok_or_else(|| ApiError::NotFound(format!("Patient {patient_id} not found")))?;
+
+    Ok(Json(patient.into()))
+}
 ```
 
 ## Module Organization
 
-### File Structure Standards
+### File Structure
 
 ```
-specs/api/src/
-├── main.tsp                    # Main API definition
-├── common/                     # Shared definitions
-│   ├── models.tsp             # Base types and common models
-│   ├── errors.tsp             # Error response types
-│   ├── pagination.tsp         # Pagination patterns
-│   └── security.tsp           # Authentication definitions
-└── modules/                    # Domain modules
-    ├── person.tsp             # Person management
-    ├── patient.tsp            # Patient-specific features
-    ├── provider.tsp           # Provider management
-    ├── booking.tsp            # Appointment scheduling
-    └── billing.tsp            # Payment and invoicing
+services/api/src/
+├── main.rs                        # Entry point, router construction
+├── config.rs                      # Config struct (clap + env vars)
+├── error.rs                       # ApiError type
+├── context.rs                     # AppContext (db, services)
+├── auth/
+│   ├── mod.rs                     # AuthUser, role types
+│   ├── session.rs                 # Session verification (HMAC)
+│   ├── password.rs                # bcrypt helpers
+│   └── backend.rs                 # Sign-up / sign-in logic
+├── middleware/
+│   └── auth.rs                    # Axum extractor for AuthUser
+├── service/
+│   ├── billing.rs                 # BillingService (async-stripe)
+│   ├── email.rs                   # EmailService (lettre + reqwest)
+│   ├── jobs.rs                    # JobScheduler (pg-boss poller)
+│   ├── notifs.rs                  # NotificationService (OneSignal)
+│   ├── storage.rs                 # StorageService (S3/MinIO)
+│   └── ws.rs                      # WebSocketService (broadcast)
+└── handlers/
+    ├── mod.rs                     # Router assembly
+    ├── auth.rs                    # Auth endpoints
+    ├── person/
+    │   ├── mod.rs                 # Router + handlers
+    │   └── repo.rs                # SeaORM queries
+    ├── patient/
+    │   ├── mod.rs
+    │   └── repo.rs
+    ├── billing/
+    │   ├── mod.rs
+    │   └── repo.rs
+    └── comms/
+        ├── mod.rs
+        └── repo.rs
 ```
 
-### Module Definition Pattern
+### Handler Module Pattern
 
-```typescript
-// ✅ Standard module structure
+```rust
+// src/handlers/patient/mod.rs
 
-// 1. Imports
-import "@typespec/http";
-import "@typespec/rest"; 
-import "@typespec/openapi";
-import "../common/models.tsp";
-import "../common/errors.tsp";
-import "../common/pagination.tsp";
-import "../common/security.tsp";
+use axum::{Router, routing::{get, post, patch, delete}};
+use crate::context::AppContext;
 
-using TypeSpec.Http;
-using TypeSpec.Rest;
-using TypeSpec.OpenAPI;
-
-// 2. Models (exported without namespace)
-@doc("Entity description")
-model Entity extends BaseEntity {
-  // Properties
+pub fn router() -> Router<AppContext> {
+    Router::new()
+        .route("/patients",          get(list_patients).post(create_patient))
+        .route("/patients/:patient", get(get_patient).patch(update_patient).delete(delete_patient))
+        .route("/patients/me",       get(get_me))
 }
 
-@doc("Request model") 
-model EntityCreateRequest {
-  // Properties
-}
-
-// 3. Namespace with interfaces
-@route("/entities")
-@tag("Entity")
-namespace EntityModule {
-  interface EntityManagement {
-    // Operations
-  }
-}
+pub async fn get_patient(/* ... */) -> Result<Json<PatientResponse>, ApiError> { /* ... */ }
+pub async fn list_patients(/* ... */) -> Result<Json<PaginatedResponse<PatientResponse>>, ApiError> { /* ... */ }
+// ...
 ```
 
 ## Examples and Templates
 
-### Complete CRUD Interface Template
+### Complete CRUD Handler Template
 
-```typescript
-namespace ExampleModule {
-  interface ExampleManagement {
-    @doc("List examples with pagination")
-    @operationId("listExamples")
-    @get
-    @useAuth(bearerAuth)
-    @extension("x-security-required-roles", ["admin", "support"])
-    listExamples(
-      @query q?: string,
-      @query expand?: string[],
-      ...PaginationParams
-    ): PaginatedResponse<Example> | AuthenticationError | AuthorizationError;
+```rust
+// src/handlers/example/mod.rs
 
-    @doc("Create new example")
-    @operationId("createExample")
-    @post  
-    @useAuth(bearerAuth)
-    @extension("x-security-required-roles", ["user"])
-    createExample(
-      @body example: ExampleCreateRequest
-    ): {
-      @statusCode statusCode: 201;
-      @body body: Example;
-    } | ValidationError | AuthenticationError | ConflictError;
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    routing::{delete, get, patch, post},
+};
+use uuid::Uuid;
 
-    @doc("Get example by ID")
-    @operationId("getExample")
-    @get
-    @route("/{example}")
-    @useAuth(bearerAuth) 
-    @extension("x-security-required-roles", ["admin", "user:owner"])
-    getExample(
-      @path example: UUID,
-      @query expand?: string[]
-    ): Example | NotFoundError | AuthorizationError;
+use crate::{
+    context::AppContext,
+    error::ApiError,
+    middleware::auth::AuthUser,
+};
 
-    @doc("Update example")
-    @operationId("updateExample")
-    @patch
-    @route("/{example}")
-    @useAuth(bearerAuth)
-    @extension("x-security-required-roles", ["admin", "user:owner"]) 
-    updateExample(
-      @path example: UUID,
-      @body updates: ExampleUpdateRequest
-    ): Example | NotFoundError | ValidationError | AuthorizationError;
+pub fn router() -> Router<AppContext> {
+    Router::new()
+        .route("/examples",          get(list_examples).post(create_example))
+        .route("/examples/:example", get(get_example).patch(update_example).delete(delete_example))
+}
 
-    @doc("Delete example")
-    @operationId("deleteExample")
-    @delete
-    @route("/{example}")
-    @useAuth(bearerAuth)
-    @extension("x-security-required-roles", ["admin", "user:owner"])
-    deleteExample(
-      @path example: UUID
-    ): {
-      @statusCode statusCode: 204;
-    } | NotFoundError | AuthorizationError;
-  }
+pub async fn list_examples(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Query(params): Query<ListExamplesParams>,
+) -> Result<Json<PaginatedResponse<ExampleResponse>>, ApiError> {
+    // ...
+    todo!()
+}
+
+pub async fn create_example(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Json(body): Json<CreateExampleRequest>,
+) -> Result<(StatusCode, Json<ExampleResponse>), ApiError> {
+    // ...
+    todo!()
+}
+
+pub async fn get_example(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(example_id): Path<Uuid>,
+) -> Result<Json<ExampleResponse>, ApiError> {
+    // ...
+    todo!()
+}
+
+pub async fn update_example(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(example_id): Path<Uuid>,
+    Json(body): Json<UpdateExampleRequest>,
+) -> Result<Json<ExampleResponse>, ApiError> {
+    // ...
+    todo!()
+}
+
+pub async fn delete_example(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(example_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    // ...
+    todo!()
 }
 ```
 
 ### Action Endpoint Template
 
-```typescript
-@doc("Perform example action")
-@operationId("performExampleAction")
-@post
-@route("/{example}/action")
-@useAuth(bearerAuth)
-@extension("x-security-required-roles", ["admin", "user:owner"])
-performAction(
-  @path example: UUID,
-  @body request: ExampleActionRequest  // Must include reason field
-): Example | NotFoundError | AuthorizationError | ValidationError;
-```
-
-### Expandable Reference Template
-
-```typescript
-// Model definition
-@doc("Example entity with expandable references")
-model Example extends BaseEntity {
-  @doc("Reference to user ID or expanded user object")
-  user: UUID | User;
-  
-  @doc("Reference to category ID or expanded category object") 
-  category: UUID | Category;
+```rust
+pub async fn cancel_appointment(
+    State(ctx): State<AppContext>,
+    AuthUser(user): AuthUser,
+    Path(appointment_id): Path<Uuid>,
+    Json(body): Json<AppointmentActionRequest>, // includes optional reason
+) -> Result<Json<AppointmentResponse>, ApiError> {
+    // ...
+    todo!()
 }
-
-// API usage
-@query expand?: string[]  // ?expand=user,category
 ```
 
 ---
 
 ## Development Workflow
 
-### 1. API-First Development Process
-
-1. **Define API in TypeSpec** (`specs/api/src/modules/`)
-2. **Generate OpenAPI + TypeScript** (`cd specs/api && bun run build`)
-3. **Generate Assets** (`cd services/api && bun run generate`)
-4. **Implement Hono handlers** (`services/api/src/handlers/`)
-5. **Use generated types** (import from `@monobase/api-spec`)
-
-### 2. Required Commands
+### 1. Development Commands
 
 ```bash
-# After API changes
-cd specs/api && bun run build
+# Build the project
+cargo build
 
-# Development
-cd services/api && bun run generate && bun dev
-cd apps/patient && bun dev
+# Run in development (reads .env automatically via dotenvy)
+cargo run
+
+# Run with a specific log level
+RUST_LOG=debug cargo run
+
+# Run tests
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Check for warnings (fast, no binary produced)
+cargo check
+
+# Run clippy lints
+cargo clippy -- -D warnings
+
+# Format code
+cargo fmt
 ```
+
+### 2. Adding a New Handler
+
+1. Create `src/handlers/{module}/mod.rs` with a `router()` function and handler functions
+2. Create `src/handlers/{module}/repo.rs` with SeaORM query functions
+3. Register the router in `src/handlers/mod.rs`
+4. Add request/response types with `#[derive(Serialize, Deserialize, utoipa::ToSchema)]`
 
 ### 3. Type Safety Verification
 
-- Import generated types from `@monobase/api-spec`
-- Use TypeScript strict mode for validation
-- Verify request/response type compatibility
+- Compile-time type safety via Rust's type system — no separate type generation step needed
+- Run `cargo check` for fast feedback without producing a binary
+- Run `cargo test` to execute all unit and integration tests
+
+### 4. Database Migrations
+
+Migrations live in `src/generated/migrations/` and are applied at startup via SeaORM's migrator:
+
+```bash
+# Migrations live in src/generated/migrations/ and are applied automatically on startup.
+# To manage migrations manually via the Sea-ORM CLI:
+sea-orm-cli migrate up
+sea-orm-cli migrate down
+sea-orm-cli migrate status
+```
 
 ---
 
-This document serves as the definitive reference for API development standards in the Monobase Healthcare Platform. All new APIs and modifications to existing APIs must follow these patterns to ensure consistency and maintainability.
+This document serves as the definitive reference for API development standards in the Monobase Healthcare Platform Rust service. All new handlers and modifications to existing handlers must follow these patterns to ensure consistency and maintainability.
