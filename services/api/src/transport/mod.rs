@@ -1,0 +1,4 @@
+pub mod http;
+
+#[cfg(feature = "embedded")]
+pub mod ipc;

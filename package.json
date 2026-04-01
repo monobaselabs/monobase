@@ -20,6 +20,7 @@
     "bun": ">=1.2.21"
   },
   "devDependencies": {
+    "@esbuild/linux-x64": "^0.27.4",
     "@rollup/rollup-darwin-arm64": "^4.52.3",
     "@rollup/rollup-linux-x64-gnu": "^4.52.3",
     "pg-cloudflare": "^1.2.7"
