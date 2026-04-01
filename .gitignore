@@ -247,3 +247,8 @@ test-results.json
 
 # Gemini
 .gemini-clipboard
+
+# Rust
+target/
+*.rlib
+*.rmeta

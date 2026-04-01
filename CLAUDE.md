@@ -12,11 +12,12 @@ For detailed information, refer to:
 
 **Monobase Application Platform** - A comprehensive full-stack monorepo platform providing video sessions, service marketplace, and user management. Built with Bun runtime for 3x faster performance than Node.js.
 
-**Key Technologies**: Bun, PostgreSQL, Drizzle ORM, Hono API, TypeSpec, TanStack Router, Better-Auth, OneSignal, S3/MinIO
+**Key Technologies**: Bun, PostgreSQL, Drizzle ORM, Hono API, TypeSpec, TanStack Router, Better-Auth, OneSignal, S3/MinIO, Rust/Axum/SeaORM
 
 **Monorepo Structure**:
 - `apps/` - Frontend applications (currently only account app)
-- `services/api/` - Backend API service with business modules
+- `services/api/` - Backend API service — TypeScript (Hono + Bun)
+- `services/api-rs/` - Backend API service — Rust (Axum + SeaORM), drop-in replacement
 - `specs/api/` - TypeSpec API definitions
 - `packages/` - Shared packages (typescript-config and ui)
 
@@ -123,13 +124,18 @@ notificationRepo.createNotificationForModule({
 ```
 
 ### Module Structure Pattern
-Backend handlers follow: **Router → Validators → Service → Handlers**
 
-Each handler directory contains:
+**TypeScript** (`services/api/`): Router → Validators → Service → Handlers
 - Handler files (CRUD operations)
 - `repos/` - Database repositories
 - `jobs/` - Background job definitions
 - `utils/` - Module-specific utilities
+
+**Rust** (`services/api-rs/`): Router → Auth middleware → Handler → Repo
+- `handlers/{module}/mod.rs` - Route handlers with auth + validation
+- `handlers/{module}/repo.rs` - SQL queries via SeaORM
+- `service/` - External integrations (Stripe, S3, email, notifications)
+- `transport/` - HTTP (Axum) and IPC adapters
 
 ## Enterprise Compliance Requirements
 
@@ -206,17 +212,28 @@ bun install
 cd specs/api && bun run build              # Generate OpenAPI + types
 cd ../../services/api && bun run generate  # Generate routes/validators
 
-# Start development
+# Start development (TypeScript API)
 cd services/api && bun dev        # API on port 7213
 cd apps/account && bun dev        # Account app on port 3002
+
+# Start development (Rust API — same port, same API surface)
+cd services/api-rs && cargo run   # API on port 7213
 
 # Database
 cd services/api && bun run db:generate  # Generate migration
 cd services/api && bun run db:studio    # Open Drizzle Studio
 
 # Testing
-cd services/api && bun test             # API tests
+cd services/api && bun test             # API tests (TypeScript)
+cd services/api-rs && cargo test        # API tests (Rust)
 cd apps/account && bun run test:e2e     # E2E tests
+
+# Rust code generation (from OpenAPI spec)
+cd services/api-rs && npx tsx generator-rs.ts
+
+# Rust release build
+cd services/api-rs && cargo build --release          # Server binary (9.6 MB)
+cd services/api-rs && cargo build --features embedded --profile release-embedded  # iOS/mobile
 ```
 
 ## Important Notes
@@ -227,14 +244,31 @@ cd apps/account && bun run test:e2e     # E2E tests
 - ✅ **Authentication** via Better-Auth (integrated, not a separate module)
 - ✅ **Consent** as JSONB fields on Person model (not a separate module)
 - ✅ **9 Core Modules**: person, booking, billing, audit, notifs, comms, storage, email, reviews
+- ✅ **services/api-rs/** - Native Rust port (Axum + SeaORM), all 68 routes, SQLite+PG, embedded/iOS support
 
 ### What Does Not Exist
 - ❌ **apps/admin/** - No admin/service provider app yet
 - ❌ **apps/website/** - No Next.js marketing website yet
 
+## Rust API Service (`services/api-rs/`)
+
+The Rust service is a drop-in replacement for the TypeScript service. Same API surface (68 routes), same database schema, same auth cookies.
+
+**Key differences from TypeScript service**:
+- **Dual DB**: Supports both PostgreSQL (server) and SQLite (embedded) via runtime dialect detection
+- **Transport separation**: HTTP (Axum) and IPC (direct call) share the same service layer
+- **Embedded mode**: `--features embedded` for Tauri/iOS, no HTTP/network dependencies
+- **Auth in Rust**: Reads Better-Auth DB tables directly (bcrypt, HMAC session cookies)
+- **No JS runtime deps**: Migrations are SQL files, auth is native, code generation is build-time only
+
+**Structure**: `src/{auth, config, context, db, embedded, error, generated, handlers, middleware, model, service, transport}`
+
+**Full spec**: See [API_REWRITE.md](./API_REWRITE.md)
+
 ## When in Doubt
 
 1. Check [README.md](./README.md) for commands and setup
 2. Check [CONTRIBUTING.md](./CONTRIBUTING.md) for development patterns
-3. Reference existing handlers in `services/api/src/handlers/` for implementation patterns
+3. Reference existing handlers in `services/api/src/handlers/` (TypeScript) or `services/api-rs/src/handlers/` (Rust) for implementation patterns
 4. Check OpenAPI spec at `specs/api/dist/openapi/openapi.json` for API contracts
+5. Check [API_REWRITE.md](./API_REWRITE.md) for Rust service architecture and decisions

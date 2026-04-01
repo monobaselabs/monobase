@@ -86,7 +86,8 @@ monobase/
 │   ├── ui/                   # Shared UI components
 │   └── sdk/                  # Type-safe API client
 ├── services/                  # Backend services
-│   └── api/                  # Main Hono API service
+│   ├── api/                  # API service — TypeScript (Hono + Bun)
+│   └── api-rs/               # API service — Rust (Axum + SeaORM)
 └── specs/                     # API specifications
     └── api/                  # TypeSpec definitions
 ```
@@ -99,11 +100,19 @@ monobase/
 - `src/lib/` - Utility functions and API clients
 - `src/hooks/` - Custom React hooks
 
-**API Service**:
+**API Service — TypeScript** (`services/api/`):
 - `src/handlers/` - Route handlers organized by module
 - `src/db/` - Drizzle schema and database logic
 - `src/middleware/` - Express-style middleware
 - `src/utils/` - Shared utilities
+
+**API Service — Rust** (`services/api-rs/`):
+- `src/handlers/` - Axum route handlers with embedded auth + validation
+- `src/handlers/{module}/repo.rs` - SQL queries via SeaORM
+- `src/service/` - External integrations (Stripe, S3, email, notifications)
+- `src/transport/` - HTTP (Axum) and IPC (embedded) adapters
+- `src/model/` - Dialect abstraction (PG + SQLite), base CRUD model
+- `src/auth/` - Session validation, bcrypt passwords (Better-Auth compatible)
 
 **Shared UI Package**:
 - `src/components/` - Reusable shadcn/ui components
@@ -304,7 +313,7 @@ vim src/handlers/patient/createPatient.ts
 bun test
 ```
 
-### What `bun run generate` Does
+### What `bun run generate` Does (TypeScript)
 
 The generation script (`scripts/generate.ts`):
 
@@ -317,6 +326,18 @@ The generation script (`scripts/generate.ts`):
 7. ✅ Generates Hono routes with validation
 8. ✅ Creates handler registry
 9. ✅ Creates handler stubs (only for new endpoints)
+
+### What `npx tsx generator-rs.ts` Does (Rust)
+
+The Rust code generator (`services/api-rs/generator-rs.ts`):
+
+1. ✅ Reads OpenAPI spec from `specs/api/dist/openapi/openapi.json`
+2. ✅ Generates `src/generated/enums.rs` — Rust enums with serde derives
+3. ✅ Generates `src/generated/types.rs` — Request/response structs with serde
+4. ✅ Generates `src/generated/routes.rs` — Route documentation and metadata
+5. ✅ Updates `src/generated/mod.rs` — Module declarations
+
+**⚠️ DO NOT EDIT** files in `services/api-rs/src/generated/` — they are overwritten by the generator.
 
 ### Troubleshooting
 
@@ -909,7 +930,7 @@ const language = 'EN'  // ❌ uppercase language
 
 Each business module follows a consistent structure for maintainability:
 
-### Backend Module Structure
+### Backend Module Structure — TypeScript
 
 ```
 services/api/src/handlers/person/
@@ -922,6 +943,16 @@ services/api/src/handlers/person/
 └── utils/
     └── validation.ts       # Person-specific validators
 ```
+
+### Backend Module Structure — Rust
+
+```
+services/api-rs/src/handlers/person/
+├── mod.rs                  # All handlers (create, get, list, update) + request/response types
+└── repo.rs                 # SQL queries via SeaORM (JsonValue + raw SQL)
+```
+
+The Rust service collocates handlers and types in `mod.rs` (no separate file per operation). The repo uses `sea_orm::JsonValue::find_by_statement` for flexible query results without codegen'd entity structs.
 
 ### Module Implementation Pattern
 
@@ -1348,7 +1379,7 @@ export async function signInAsUser(page: Page, email: string, password: string) 
 
 ## Testing Requirements
 
-### Unit Tests (API Service)
+### Unit Tests — TypeScript API
 
 ```bash
 cd services/api
@@ -1379,6 +1410,35 @@ describe('ClientService', () => {
     expect(client.person_id).toBe('123e4567-e89b-12d3-a456-426614174000');
   });
 });
+```
+
+### Unit Tests — Rust API
+
+```bash
+cd services/api-rs
+cargo test
+```
+
+Write tests for:
+- Auth (bcrypt hashing, HMAC session verification)
+- Dialect abstraction (PG vs SQLite SQL generation)
+- Business logic in handlers and repos
+
+**Example Test** (already in codebase):
+```rust
+// services/api-rs/src/auth/password.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hash_and_verify() {
+        let password = "test-password-123";
+        let hash = hash_password(password).unwrap();
+        assert!(verify_password(password, &hash).unwrap());
+        assert!(!verify_password("wrong-password", &hash).unwrap());
+    }
+}
 ```
 
 ### E2E Tests (Frontend Apps)

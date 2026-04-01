@@ -7,7 +7,8 @@ A full-stack monorepo platform providing video sessions, messaging, and user man
 Monobase is a modern application platform designed to streamline user management and business workflows. The platform provides:
 
 - **Account App** - Self-service account management and video sessions
-- **API Service** - Backend with core business modules
+- **API Service (TypeScript)** - Backend with core business modules (Bun/Hono)
+- **API Service (Rust)** - Native Rust port for server + embedded/iOS deployment
 
 ## Key Features
 
@@ -27,7 +28,8 @@ monobase/
 │   ├── typescript-config/    # Shared TypeScript configurations
 │   └── ui/                   # Shared UI components
 ├── services/                  # Backend services
-│   └── api/                  # Main API service (Hono + Bun)
+│   ├── api/                  # API service — TypeScript (Hono + Bun)
+│   └── api-rs/               # API service — Rust (Axum + SeaORM)
 ├── specs/                     # API specifications
 │   └── api/                  # TypeSpec source definitions
 ├── CLAUDE.md                 # AI assistant project guide
@@ -39,6 +41,7 @@ monobase/
 - **Bun** >= 1.2.21 ([installation guide](https://bun.sh))
 - **PostgreSQL** >= 14
 - **Node.js** >= 18 (for some tooling compatibility)
+- **Rust** >= 1.91 (for `services/api-rs`, [installation guide](https://rustup.rs))
 - **Git** for version control
 
 ### Optional Services
@@ -126,7 +129,7 @@ bun run --filter '*' build    # Build all packages
 bun run clean                  # Clean build artifacts
 ```
 
-### API Service (`services/api/`)
+### API Service — TypeScript (`services/api/`)
 
 ```bash
 bun dev                        # Start development server (port 7213)
@@ -139,6 +142,23 @@ bun run db:studio              # Open Drizzle Studio
 ```
 
 **⚠️ Code Generation**: The API service auto-generates routes, validators, and handler stubs from TypeSpec. See [CONTRIBUTING.md#code-generation](./CONTRIBUTING.md#code-generation---do-not-edit) for what files to never edit manually.
+
+### API Service — Rust (`services/api-rs/`)
+
+```bash
+cargo run                      # Start development server (port 7213)
+cargo build --release          # Build optimized binary (9.6 MB)
+cargo test                     # Run test suite
+cargo check                    # Fast type checking (no codegen)
+npx tsx generator-rs.ts        # Generate Rust types/enums from OpenAPI spec
+```
+
+The Rust service is a drop-in replacement for the TypeScript service — same API surface, same database, same auth cookies. It additionally supports:
+- **Embedded mode**: `cargo build --features embedded --profile release-embedded` for Tauri/iOS
+- **SQLite + PostgreSQL**: Runtime dialect detection from `DATABASE_URL`
+- **Docker**: `docker build -t monobase-api services/api-rs/`
+
+See [API_REWRITE.md](./API_REWRITE.md) for the full rewrite specification.
 
 ### API Specifications (`specs/api/`)
 
@@ -221,13 +241,22 @@ The API service is organized into domain-specific modules:
 - **Framer Motion** - Animations
 - **React Hook Form** + **Zod** - Form validation
 
-### Backend
+### Backend (TypeScript)
 - **Hono** - Fast web framework
 - **Drizzle ORM** - Type-safe database queries
 - **PostgreSQL** - Primary database
 - **Better-Auth** - Authentication (no external service)
 - **Pino** - Structured JSON logging
 - **Zod** - Runtime validation
+
+### Backend (Rust)
+- **Axum** 0.8 - Web framework (tower ecosystem)
+- **SeaORM** 1.1 - Async ORM (PostgreSQL + SQLite)
+- **tokio** - Async runtime
+- **tracing** - Structured logging
+- **async-stripe** - Stripe integration
+- **aws-sdk-s3** - S3/MinIO storage
+- **lettre** - SMTP email
 
 ### API & Types
 - **TypeSpec** - API-first specification language
@@ -276,10 +305,11 @@ cd apps/account && bun run typecheck
 
 ## Performance
 
-- **3x Faster Startup** - Bun vs Node.js
-- **Native TypeScript** - No transpilation overhead
+- **3x Faster Startup** - Bun vs Node.js (TypeScript service)
+- **Native Binary** - 9.6 MB, ~100ms cold start (Rust service)
 - **Connection Pooling** - Optimized database queries
 - **JSONB Indexing** - Fast consent and config queries
+- **Embedded Mode** - Direct IPC, no HTTP overhead (Rust + Tauri)
 
 ## License
 

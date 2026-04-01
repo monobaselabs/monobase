@@ -1,0 +1,110 @@
+[package]
+name = "monobase-api"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Monobase Application Platform API — native Rust backend"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP framework
+axum = { version = "0.8", features = ["json", "multipart", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip"] }
+
+# ORM & Database
+sea-orm = { version = "1.1", features = [
+    "sqlx-postgres",
+    "sqlx-sqlite",
+    "runtime-tokio-native-tls",
+    "with-chrono",
+    "with-uuid",
+    "with-json",
+] }
+sea-query = "0.32"
+
+# Auth
+bcrypt = "0.16"
+jsonwebtoken = "9"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+
+# OpenAPI
+utoipa = { version = "5.3", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-axum = "0.2"
+utoipa-scalar = { version = "0.2", features = ["axum"] }
+
+# Validation
+garde = { version = "0.21", features = ["derive", "email", "url"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utils
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+nanoid = "0.4"
+urlencoding = "2"
+async-trait = "0.1"
+dotenvy = "0.15"
+
+# HTTP client (for Stripe, OneSignal, etc.)
+reqwest = { version = "0.12", features = ["json"] }
+
+# AWS SDK — S3 / MinIO storage
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+
+# Email — SMTP via lettre
+lettre = { version = "0.11", features = ["tokio1-native-tls", "builder"] }
+
+# WebSocket utilities
+futures-util = "0.3"
+
+# Billing
+async-stripe = { version = "0.39", features = [
+    "runtime-tokio-hyper",
+    "billing",
+    "connect",
+    "webhook-events",
+    "events",
+] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# SQLite for embedded
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.10"
+pretty_assertions = "1.4"
+
+[features]
+default = ["postgres", "sqlite"]
+postgres = []
+sqlite = []
+embedded = ["rusqlite"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release-embedded]
+inherits = "release"
+opt-level = "z"
